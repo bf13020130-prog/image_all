@@ -10,7 +10,8 @@ services:
     volumes:
       - ./platform_runtime:/app/platform_runtime
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${PLATFORM_BIND:-127.0.0.1}:${PLATFORM_PORT:-8000}:${PLATFORM_PORT:-8000}"
+    command: ["python", "-m", "platform_backend.app"]
 
   worker:
     build:
