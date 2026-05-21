@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>设计出图</title>
+    <link rel="icon" type="image/svg+xml" href="./datadog.svg" />
+    <link rel="shortcut icon" href="./datadog.svg" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -620,7 +622,12 @@
                     设置有改动就自动保存。数量、尺寸在任务页输入，系统提示词和请求参数在这里维护。
                   </p>
                 </div>
-                <span class="status-pill status-pill--soft" id="autosaveBadgeInline">已同步</span>
+                <div class="settings-save-actions">
+                  <span class="status-pill status-pill--soft" id="autosaveBadgeInline">已同步</span>
+                  <button class="secondary-action" id="saveSettingsButton" type="button">
+                    立即保存
+                  </button>
+                </div>
               </div>
 
               <div class="settings-stack__sections">

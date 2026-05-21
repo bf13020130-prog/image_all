@@ -106,6 +106,47 @@ def get_public_global_settings() -> dict[str, Any]:
     return public_settings_payload(get_global_settings())
 
 
+def get_global_secret_status() -> dict[str, dict[str, Any]]:
+    settings = get_global_settings()
+    status: dict[str, dict[str, Any]] = {}
+    for key in SECRET_KEYS:
+        value = str(settings.get(key) or "")
+        saved = bool(value and value != "replace-me")
+        status[key] = {
+            "saved": saved,
+            "masked": mask_secret(value) if saved else "",
+        }
+    return status
+
+
+def get_admin_global_settings(*, reveal_secrets: bool = False) -> dict[str, Any]:
+    settings = get_global_settings()
+    payload = public_settings_payload(settings)
+    payload["_secret_keys"] = list(SECRET_KEYS)
+    payload["_secret_status"] = get_global_secret_status()
+    for key in SECRET_KEYS:
+        if str(settings.get(key) or "") == "replace-me":
+            payload[key] = ""
+    if reveal_secrets:
+        for key in SECRET_KEYS:
+            value = str(settings.get(key) or "")
+            payload[key] = "" if value == "replace-me" else value
+    return payload
+
+
+def _user_uses_global_secrets(user_id: str) -> bool:
+    with connect() as conn:
+        row = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
+    return bool(row and row["role"] == "admin")
+
+
+def _global_settings_for_user(user_id: str) -> dict[str, Any]:
+    settings = get_global_settings()
+    if _user_uses_global_secrets(user_id):
+        return settings
+    return _without_secret_values(settings)
+
+
 def _without_secret_values(payload: dict[str, Any]) -> dict[str, Any]:
     cleaned = dict(payload)
     for key in SECRET_KEYS:
@@ -201,7 +242,7 @@ def save_user_settings(user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     current_secrets = get_user_secrets(user_id, reveal=True)
     _normalize_settings(
         {
-            **_without_secret_values(get_global_settings()),
+            **_global_settings_for_user(user_id),
             **settings_payload_clean,
             **current_secrets,
         }
@@ -237,13 +278,21 @@ def get_user_secrets(user_id: str, *, reveal: bool = False) -> dict[str, str]:
 
 
 def get_user_secret_status(user_id: str) -> dict[str, dict[str, Any]]:
+    global_status = get_global_secret_status() if _user_uses_global_secrets(user_id) else {}
     with connect() as conn:
         rows = conn.execute(
             "SELECT secret_key, encrypted_value, updated_at FROM user_secrets WHERE user_id = ?",
             (user_id,),
         ).fetchall()
     status = {
-        key: {"saved": False, "masked": "", "updated_at": ""}
+        key: {
+            "saved": False,
+            "masked": "",
+            "updated_at": "",
+            "default_saved": bool(global_status.get(key, {}).get("saved")),
+            "default_masked": str(global_status.get(key, {}).get("masked") or ""),
+            "effective_source": "global" if global_status.get(key, {}).get("saved") else "empty",
+        }
         for key in SECRET_KEYS
     }
     for row in rows:
@@ -255,6 +304,11 @@ def get_user_secret_status(user_id: str) -> dict[str, dict[str, Any]]:
             "saved": bool(value),
             "masked": mask_secret(value),
             "updated_at": row["updated_at"],
+            "default_saved": bool(global_status.get(key, {}).get("saved")),
+            "default_masked": str(global_status.get(key, {}).get("masked") or ""),
+            "effective_source": "user" if value else (
+                "global" if global_status.get(key, {}).get("saved") else "empty"
+            ),
         }
     return status
 
@@ -288,7 +342,7 @@ def save_user_secrets(user_id: str, payload: dict[str, Any]) -> dict[str, str]:
 def effective_settings_for_user(user_id: str) -> dict[str, Any]:
     normalized = _normalize_settings(
         {
-            **_without_secret_values(get_global_settings()),
+            **_global_settings_for_user(user_id),
             **get_user_settings(user_id),
             **get_user_secrets(user_id, reveal=True),
         }

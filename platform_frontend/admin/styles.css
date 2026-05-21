@@ -259,6 +259,51 @@ textarea::placeholder {
   opacity: 1;
 }
 
+.secret-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 8px;
+  align-items: center;
+}
+
+.secret-reveal-button {
+  width: 38px;
+  min-height: 38px;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.secret-reveal-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.secret-reveal-button:hover,
+.secret-reveal-button.is-active {
+  background: var(--accent);
+  color: #0c1814;
+}
+
+.secret-save-state {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.secret-save-state--saved {
+  color: #b7efd0;
+}
+
+.secret-save-state--empty {
+  color: #ffd5cc;
+}
+
 .topbar input,
 .topbar select,
 .topbar textarea,

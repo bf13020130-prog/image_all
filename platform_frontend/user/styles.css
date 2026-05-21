@@ -316,6 +316,14 @@ body::before {
   gap: 12px;
 }
 
+.settings-save-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .section-copy,
 .muted-copy {
   margin: 0;
@@ -2366,6 +2374,12 @@ body::before {
 .platform-login__card .password-reveal__button.is-active {
   color: #211915;
   background: rgba(133, 94, 48, 0.1);
+}
+
+.platform-login__switch {
+  background: rgba(87, 61, 36, 0.08);
+  color: #211915;
+  box-shadow: inset 0 0 0 1px rgba(87, 61, 36, 0.18);
 }
 
 .platform-login__message {

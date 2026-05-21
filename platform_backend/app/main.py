@@ -150,6 +150,13 @@ def create_app() -> FastAPI:
     if admin_dir.exists():
         app.mount("/admin", StaticFiles(directory=str(admin_dir), html=True), name="admin")
 
+    @app.get("/favicon.ico")
+    def favicon() -> FileResponse:
+        icon_path = user_dir / "datadog.svg"
+        if not icon_path.exists():
+            raise HTTPException(status_code=404, detail="图标不存在。")
+        return FileResponse(icon_path, media_type="image/svg+xml")
+
     @app.get("/")
     def index() -> RedirectResponse:
         return RedirectResponse("/user/")

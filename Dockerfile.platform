@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r /app/platform_backend/requirements.txt
 
 COPY platform_backend /app/platform_backend
 COPY platform_frontend /app/platform_frontend
+COPY scripts /app/scripts
 COPY app.py /app/app.py
 COPY api_server.py /app/api_server.py
 COPY pipeline_core.py /app/pipeline_core.py

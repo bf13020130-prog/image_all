@@ -1,5 +1,6 @@
 let csrfToken = "";
 let currentUser = null;
+let revealedGlobalSettings = null;
 
 const refs = {};
 
@@ -425,6 +426,7 @@ async function createUser() {
 
 async function loadSettings() {
   const payload = await api("/api/v1/admin/settings");
+  revealedGlobalSettings = null;
   renderSettingsForm(payload.settings || {});
 }
 
@@ -466,6 +468,11 @@ function createSettingField(field, settings) {
   label.appendChild(textSpan(field.label));
   const control = createControl(field, settings);
   control.dataset.setting = field.key;
+  if (SECRET_FIELDS.has(field.key)) {
+    label.appendChild(createSecretControl(field.key, control, settings));
+    label.appendChild(createSecretStatus(field.key, settings));
+    return label;
+  }
   label.appendChild(control);
   return label;
 }
@@ -490,7 +497,82 @@ function createControl(field, settings) {
   if (field.max !== undefined) input.max = String(field.max);
   if (field.maxKey && settings[field.maxKey] !== undefined) input.max = String(settings[field.maxKey]);
   input.value = settings[field.key] ?? "";
+  if (SECRET_FIELDS.has(field.key)) {
+    input.dataset.originalSecretValue = String(input.value || "");
+  }
   return input;
+}
+
+function createSecretControl(key, input, settings) {
+  const wrapper = document.createElement("span");
+  wrapper.className = "secret-control";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secret-reveal-button";
+  button.dataset.secretKey = key;
+  button.setAttribute("aria-label", "查看或隐藏密钥");
+  button.setAttribute("title", "查看或隐藏密钥");
+  button.innerHTML = `
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+  `;
+  button.addEventListener("click", () => void runAction(() => toggleSecretReveal(input, button)));
+  wrapper.append(input, button);
+  return wrapper;
+}
+
+function createSecretStatus(key, settings) {
+  const status = settings?._secret_status?.[key] || {};
+  const node = document.createElement("p");
+  node.className = `secret-save-state ${
+    status.saved ? "secret-save-state--saved" : "secret-save-state--empty"
+  }`;
+  node.textContent = status.saved
+    ? `已设置：${status.masked || "******"}`
+    : "未设置默认密钥；管理员账号运行时不会有默认 key";
+  return node;
+}
+
+async function toggleSecretReveal(input, button) {
+  if (input.type === "password") {
+    if (shouldFetchSecretValue(input)) {
+      const settings = await loadRevealedGlobalSettings();
+      const value = settings[input.dataset.setting] ?? "";
+      input.value = value;
+      input.dataset.originalSecretValue = String(value || "");
+      input.dataset.revealedSecret = "1";
+    }
+    input.type = "text";
+    button.classList.add("is-active");
+    button.setAttribute("aria-pressed", "true");
+    return;
+  }
+  input.type = "password";
+  button.classList.remove("is-active");
+  button.setAttribute("aria-pressed", "false");
+}
+
+function shouldFetchSecretValue(input) {
+  if (input.dataset.revealedSecret === "1") {
+    return false;
+  }
+  const currentValue = String(input.value || "");
+  const originalValue = String(input.dataset.originalSecretValue || "");
+  if (!currentValue || currentValue === originalValue) {
+    return true;
+  }
+  return currentValue.includes("***") || currentValue.includes("...");
+}
+
+async function loadRevealedGlobalSettings() {
+  if (revealedGlobalSettings) {
+    return revealedGlobalSettings;
+  }
+  const payload = await api("/api/v1/admin/settings?reveal_secrets=1");
+  revealedGlobalSettings = payload.settings || {};
+  return revealedGlobalSettings;
 }
 
 function resolveOptions(field, settings) {

@@ -25,9 +25,9 @@ def future_utc(days: int) -> str:
     return (datetime.utcnow() + timedelta(days=days)).isoformat(timespec="seconds") + "Z"
 
 
-def hash_password(password: str) -> str:
-    if not password or len(password) < 8:
-        raise ValueError("密码至少需要 8 位。")
+def hash_password(password: str, *, min_length: int = 8) -> str:
+    if not password or len(password) < min_length:
+        raise ValueError(f"密码至少需要 {min_length} 位。")
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac(
         "sha256",
@@ -102,4 +102,3 @@ def mask_secret(value: Any) -> str:
     if len(text) <= 8:
         return "*" * len(text)
     return f"{text[:4]}...{text[-4:]}"
-

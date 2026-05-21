@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..auth import public_user, require_admin, require_csrf_user
 from ..database import connect, new_id, row_to_dict, transaction
 from ..legacy_contract import collect_job_log_entries
 from ..security import hash_password, make_temporary_password, utc_now
-from ..settings_service import get_public_global_settings, save_global_settings, public_settings_payload
+from ..settings_service import get_admin_global_settings, save_global_settings
 from ..storage_service import delete_user_storage, storage_used_by_user
 from ..task_service import audit_log, get_job, get_user_quota, list_jobs
 
@@ -298,9 +298,12 @@ def admin_job_logs(job_id: str, user: dict = Depends(require_csrf_user)) -> dict
 
 
 @router.get("/settings")
-def admin_settings(user: dict = Depends(require_csrf_user)) -> dict:
+def admin_settings(
+    reveal_secrets: bool = Query(default=False),
+    user: dict = Depends(require_csrf_user),
+) -> dict:
     _admin(user)
-    return {"settings": get_public_global_settings()}
+    return {"settings": get_admin_global_settings(reveal_secrets=reveal_secrets)}
 
 
 @router.put("/settings")
@@ -317,4 +320,4 @@ def update_admin_settings(
         target_id="default",
         details={"keys": sorted(payload.settings.keys())},
     )
-    return {"settings": public_settings_payload(settings)}
+    return {"settings": get_admin_global_settings()}

@@ -173,7 +173,28 @@ async function ensurePlatformSession() {
   document.body.classList.add("platform-auth-required");
   const panel = ensurePlatformLoginPanel();
   const form = panel.querySelector("form");
+  const title = panel.querySelector("[data-auth-title]");
+  const submitButton = panel.querySelector("[data-auth-submit]");
+  const toggleButton = panel.querySelector("[data-platform-auth-toggle]");
   const message = panel.querySelector(".platform-login__message");
+  enhancePasswordFields();
+
+  const setMode = (mode) => {
+    const isRegistering = mode === "register";
+    form.dataset.authMode = isRegistering ? "register" : "login";
+    title.textContent = isRegistering ? "注册账号" : "账号密码登录";
+    submitButton.textContent = isRegistering ? "注册并进入" : "登录";
+    toggleButton.textContent = isRegistering ? "已有账号，返回登录" : "没有账号，立即注册";
+    form.elements.namedItem("password").autocomplete = isRegistering
+      ? "new-password"
+      : "current-password";
+    message.textContent = "";
+  };
+
+  toggleButton.addEventListener("click", () => {
+    setMode(form.dataset.authMode === "register" ? "login" : "register");
+  });
+
   await new Promise((resolve) => {
     form.addEventListener(
       "submit",
@@ -181,9 +202,13 @@ async function ensurePlatformSession() {
         event.preventDefault();
         void (async () => {
           const data = new FormData(form);
+          const isRegistering = form.dataset.authMode === "register";
+          const endpoint = isRegistering ? "/api/v1/auth/register" : "/api/v1/auth/login";
           message.textContent = "";
+          submitButton.disabled = true;
+          submitButton.textContent = isRegistering ? "注册中..." : "登录中...";
           try {
-            const payload = await platformFetch("/api/v1/auth/login", {
+            const payload = await platformFetch(endpoint, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -197,7 +222,10 @@ async function ensurePlatformSession() {
             panel.hidden = true;
             resolve();
           } catch (error) {
-            message.textContent = error.message || "登录失败。";
+            message.textContent = error.message || (isRegistering ? "注册失败。" : "登录失败。");
+          } finally {
+            submitButton.disabled = false;
+            submitButton.textContent = isRegistering ? "注册并进入" : "登录";
           }
         })();
       },
@@ -229,9 +257,9 @@ function ensurePlatformLoginPanel() {
   panel.id = "platformLoginPanel";
   panel.className = "platform-login";
   panel.innerHTML = `
-    <form class="platform-login__card">
+    <form class="platform-login__card" data-auth-mode="login">
       <p class="eyebrow">内部 Web 平台</p>
-      <h2>账号密码登录</h2>
+      <h2 data-auth-title>账号密码登录</h2>
       <label class="field">
         <span>账号</span>
         <input name="username" autocomplete="username" required />
@@ -240,7 +268,10 @@ function ensurePlatformLoginPanel() {
         <span>密码</span>
         <input name="password" type="password" autocomplete="current-password" required />
       </label>
-      <button class="primary-action" type="submit">登录</button>
+      <button class="primary-action" type="submit" data-auth-submit>登录</button>
+      <button class="secondary-action platform-login__switch" type="button" data-platform-auth-toggle>
+        没有账号，立即注册
+      </button>
       <p class="platform-login__message" role="alert"></p>
     </form>
   `;
@@ -392,6 +423,7 @@ function cacheDom() {
 
   refs.settingsForm = document.getElementById("settingsForm");
   refs.autosaveBadgeInline = document.getElementById("autosaveBadgeInline");
+  refs.saveSettingsButton = document.getElementById("saveSettingsButton");
 
   refs.styleFileInput = document.getElementById("styleFileInput");
   refs.styleFileName = document.getElementById("styleFileName");
@@ -555,6 +587,9 @@ function bindEvents() {
 
   refs.settingsForm.addEventListener("input", onSettingsChanged);
   refs.settingsForm.addEventListener("change", onSettingsChanged);
+  refs.saveSettingsButton.addEventListener("click", () => {
+    void saveSettings();
+  });
 
   refs.styleFileInput.addEventListener("change", () => {
     addReferenceFiles("style", Array.from(refs.styleFileInput.files || []));
@@ -3176,6 +3211,10 @@ function onSettingsChanged(event) {
 }
 
 async function saveSettings() {
+  if (refs.saveSettingsButton) {
+    refs.saveSettingsButton.disabled = true;
+    refs.saveSettingsButton.textContent = "保存中...";
+  }
   try {
     const payload = collectSettingsPayload();
     state.settings = await apiFetch("/api/settings", {
@@ -3189,8 +3228,23 @@ async function saveSettings() {
     renderTopStatus();
     renderTaskMetrics();
     refs.autosaveBadgeInline.textContent = "已同步";
+    if (refs.saveSettingsButton) {
+      refs.saveSettingsButton.textContent = "已保存";
+      window.setTimeout(() => {
+        if (refs.saveSettingsButton) {
+          refs.saveSettingsButton.textContent = "立即保存";
+        }
+      }, 1200);
+    }
   } catch (error) {
     refs.autosaveBadgeInline.textContent = `保存失败: ${error.message}`;
+    if (refs.saveSettingsButton) {
+      refs.saveSettingsButton.textContent = "保存失败";
+    }
+  } finally {
+    if (refs.saveSettingsButton) {
+      refs.saveSettingsButton.disabled = false;
+    }
   }
 }
 
