@@ -1,0 +1,76 @@
+{
+  "name": "design-output-desktop",
+  "version": "0.1.1",
+  "private": true,
+  "description": "设计出图 Electron desktop",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "prepare:runtime": "python prepare_runtime.py",
+    "prepare:backend-exe": "python scripts/prepare_backend_exe_runtime.py",
+    "pack": "npm run prepare:runtime && electron-builder --dir",
+    "dist": "npm run prepare:runtime && electron-builder --win portable && node scripts/fix-win-unpacked-icon.js",
+    "dist:backend-exe": "npm run prepare:runtime && npm run prepare:backend-exe && electron-builder --win portable --config electron-builder.backend-exe.json"
+  },
+  "devDependencies": {
+    "electron": "^36.3.2",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "local.design.output",
+    "npmRebuild": false,
+    "productName": "设计出图",
+    "asar": true,
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "electron/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "runtime/backend",
+        "to": "backend"
+      },
+      {
+        "from": "config.example.json",
+        "to": "config.example.json"
+      },
+      {
+        "from": "runtime/seed-config.json",
+        "to": "seed-config.json"
+      },
+      {
+        "from": "web",
+        "to": "web"
+      },
+      {
+        "from": "runtime/python-runtime",
+        "to": "python-runtime"
+      },
+      {
+        "from": "compat-mode.flag",
+        "to": "compat-mode.flag"
+      }
+    ],
+    "win": {
+      "icon": "electron/icon.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "设计出图-${version}-win11-diagnose-20260514.${ext}"
+    }
+  }
+}

@@ -1,0 +1,44 @@
+# Local secrets and runtime state
+config.json
+logs/
+data/
+_runtime_uploads/
+_autosave_test/
+_open_path_test/
+_ui_test_state/
+.codex-log-check/
+_tmp_*/
+acl-test.tmp
+.codex_git/
+platform_runtime/
+.env
+.env.*
+!.env.example
+crash-dumps/
+cleanup-old-packages.*
+_tmp_*/
+tmp*/
+*.zip
+
+# Build outputs
+build/
+build-backend/
+build-backend-exe/
+build-backend-test/
+dist/
+dist-backend/
+dist-backend-exe/
+dist-backend-test/
+dist-electron/
+dist-electron-backend-exe/
+dist-electron-backend-exe-final/
+runtime/
+release/
+
+# Dependencies and caches
+node_modules/
+__pycache__/
+*.py[cod]
+
+# Local UI/debug artifacts
+.ui-*.png

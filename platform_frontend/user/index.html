@@ -1,0 +1,1044 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>设计出图</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <img class="brand-logo" src="./datadog.jpg" alt="设计出图 logo" />
+          <div>
+            <p class="eyebrow">内部 Web 平台</p>
+            <h1>设计出图</h1>
+          </div>
+        </div>
+
+        <nav class="top-nav" aria-label="主导航">
+          <button class="nav-chip is-active" data-route="style-replicate">复刻风格图片</button>
+          <button class="nav-chip" data-route="style-replicate-v2">复刻风格图片2</button>
+          <button class="nav-chip" data-route="image-edit">图片生成</button>
+          <button class="nav-chip" data-route="color-match">一键追色</button>
+          <button class="nav-chip" data-route="history">历史</button>
+          <button class="nav-chip" data-route="settings">设置</button>
+        </nav>
+
+        <div class="top-actions">
+          <span class="status-pill" id="sharedPoolBadge">共享并发池 -</span>
+          <button class="icon-button" id="openLogModalButton" type="button" aria-label="打开日志">
+            日志
+          </button>
+        </div>
+      </header>
+
+      <main class="page-stack">
+        <section class="page-view is-visible" data-view="style-replicate">
+          <div class="page-section-stack">
+            <article class="page-card page-card--dark form-card">
+              <div class="section-heading section-heading--tight">
+                <p class="eyebrow">主任务</p>
+                <h2>复刻风格图片</h2>
+                <p class="section-copy">
+                  这里只处理生成任务本身。系统提示词、请求配置和共享并发池统一在设置里维护。
+                </p>
+              </div>
+
+              <div class="task-note-list" aria-label="任务说明">
+                <span class="note-chip">风格图只参与提示词整理</span>
+                <span class="note-chip">生图阶段只上传产品图</span>
+                <span class="note-chip">结果统一归档到历史和 data/image</span>
+              </div>
+
+              <form id="replicateForm" class="task-form">
+                <div class="task-toolbar">
+                  <label class="field">
+                    <span>提示词数</span>
+                    <input type="number" name="prompt_count" min="1" max="50" required />
+                  </label>
+
+                  <label class="field">
+                    <span>分辨率</span>
+                    <select name="output_resolution" required></select>
+                  </label>
+
+                  <label class="field">
+                    <span>比例</span>
+                    <select name="output_aspect_ratio" required></select>
+                  </label>
+
+                  <div class="toolbar-actions">
+                    <button class="primary-action" type="submit">开始生成</button>
+                    <button class="secondary-action" type="button" id="openDataButton">
+                      打开数据目录
+                    </button>
+                  </div>
+                </div>
+
+                <label class="field field--full">
+                  <span>用户提示词</span>
+                  <textarea
+                    name="user_prompt"
+                    rows="5"
+                    placeholder="点击后可输入你自己的要求；如果留空，提交时会自动回退到内置默认提示词。"
+                  ></textarea>
+                </label>
+
+                <div class="reference-grid">
+                  <fieldset class="reference-card">
+                    <legend>风格图</legend>
+                    <div class="reference-card__top">
+                      <span class="reference-tag">1~5 张，只做提示词参考</span>
+                      <button
+                        class="secondary-action secondary-action--small"
+                        type="button"
+                        id="styleClearReferenceButton"
+                      >
+                        清空图片
+                      </button>
+                    </div>
+
+                    <div class="field">
+                      <span>本地上传</span>
+                      <input
+                        class="file-input"
+                        type="file"
+                        name="style_file"
+                        accept="image/*"
+                        multiple
+                        id="styleFileInput"
+                      />
+                      <label class="file-picker" for="styleFileInput">
+                        <span class="file-trigger">选择文件</span>
+                        <span class="file-name" id="styleFileName">未选择任何文件</span>
+                      </label>
+                    </div>
+
+                    <label class="field">
+                      <span>图片链接（可多行）</span>
+                      <textarea
+                        name="style_url"
+                        rows="2"
+                        placeholder="https://... 每行一个，合计最多 5 张"
+                        id="styleUrlInput"
+                      ></textarea>
+                    </label>
+
+                    <div class="reference-preview">
+                      <div class="reference-preview__image" id="stylePreviewImage">
+                        <span>未选择风格图</span>
+                      </div>
+                      <p class="reference-preview__meta" id="stylePreviewMeta">
+                        可上传本地图片，或填写图片链接。
+                      </p>
+                    </div>
+                  </fieldset>
+
+                  <fieldset class="reference-card">
+                    <legend>产品图</legend>
+                    <div class="reference-card__top">
+                      <span class="reference-tag">1~5 张，生图实际使用</span>
+                      <button
+                        class="secondary-action secondary-action--small"
+                        type="button"
+                        id="productClearReferenceButton"
+                      >
+                        清空图片
+                      </button>
+                    </div>
+
+                    <div class="field">
+                      <span>本地上传</span>
+                      <input
+                        class="file-input"
+                        type="file"
+                        name="product_file"
+                        accept="image/*"
+                        multiple
+                        id="productFileInput"
+                      />
+                      <label class="file-picker" for="productFileInput">
+                        <span class="file-trigger">选择文件</span>
+                        <span class="file-name" id="productFileName">未选择任何文件</span>
+                      </label>
+                    </div>
+
+                    <label class="field">
+                      <span>图片链接（可多行）</span>
+                      <textarea
+                        name="product_url"
+                        rows="2"
+                        placeholder="https://... 每行一个，合计最多 5 张"
+                        id="productUrlInput"
+                      ></textarea>
+                    </label>
+
+                    <div class="reference-preview">
+                      <div class="reference-preview__image" id="productPreviewImage">
+                        <span>未选择产品图</span>
+                      </div>
+                      <p class="reference-preview__meta" id="productPreviewMeta">
+                        生图请求实际会使用这里的产品图。
+                      </p>
+                    </div>
+                  </fieldset>
+                </div>
+              </form>
+            </article>
+
+            <article class="page-card page-card--dark task-board-card">
+              <div class="section-heading section-heading--tight">
+                <p class="eyebrow">运行状态</p>
+                <h3>任务看板</h3>
+              </div>
+
+              <div class="task-board-summary">
+                <div class="task-stat">
+                  <span>共享并发池</span>
+                  <strong id="taskSharedPoolValue">-</strong>
+                </div>
+                <div class="task-stat">
+                  <span>单条出图数</span>
+                  <strong id="taskImagesPerPromptValue">-</strong>
+                </div>
+                <div class="task-stat">
+                  <span>当前状态</span>
+                  <strong id="taskJobStatusValue">空闲</strong>
+                </div>
+                <div class="task-stat">
+                  <span>最近更新</span>
+                  <strong id="taskUpdatedAtValue">-</strong>
+                </div>
+              </div>
+
+              <div id="taskBoard" class="task-board">
+                <p class="muted-copy">提交后任务会以紧凑卡片的形式出现在这里。</p>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page-view" data-view="style-replicate-v2">
+          <div class="page-section-stack">
+            <article class="page-card page-card--dark form-card">
+              <div class="section-heading section-heading--tight">
+                <p class="eyebrow">主任务</p>
+                <h2>复刻风格图片2</h2>
+                <p class="section-copy">
+                  只上传一组参考图；这组图会同时用于风格指纹提取、产品身份识别和生图参考。
+                </p>
+              </div>
+
+              <div class="task-note-list" aria-label="任务说明">
+                <span class="note-chip">参考图同时承担风格和产品参考</span>
+                <span class="note-chip">支持 1~10 张参考图</span>
+                <span class="note-chip">生图阶段继续上传同一组参考图</span>
+              </div>
+
+              <form id="replicate2Form" class="task-form">
+                <div class="task-toolbar">
+                  <label class="field">
+                    <span>提示词数</span>
+                    <input type="number" name="prompt_count" min="1" max="50" required />
+                  </label>
+
+                  <label class="field">
+                    <span>分辨率</span>
+                    <select name="output_resolution" required></select>
+                  </label>
+
+                  <label class="field">
+                    <span>比例</span>
+                    <select name="output_aspect_ratio" required></select>
+                  </label>
+
+                  <div class="toolbar-actions">
+                    <button class="primary-action" type="submit">开始生成</button>
+                    <button class="secondary-action" type="button" id="replicate2OpenDataButton">
+                      打开数据目录
+                    </button>
+                  </div>
+                </div>
+
+                <label class="field field--full">
+                  <span>用户提示词</span>
+                  <textarea
+                    name="user_prompt"
+                    rows="5"
+                    placeholder="可补充本次任务要求；如果留空，提交时会使用设置里的复刻风格图片2默认用户提示词。"
+                  ></textarea>
+                </label>
+
+                <div class="reference-grid reference-grid--single">
+                  <fieldset class="reference-card">
+                    <legend>参考图</legend>
+                    <div class="reference-card__top">
+                      <span class="reference-tag">1~10 张，作为唯一参考</span>
+                      <button
+                        class="secondary-action secondary-action--small"
+                        type="button"
+                        id="style2ClearReferenceButton"
+                      >
+                        清空图片
+                      </button>
+                    </div>
+
+                    <div class="field">
+                      <span>本地上传</span>
+                      <input
+                        class="file-input"
+                        type="file"
+                        name="reference_file"
+                        accept="image/*"
+                        multiple
+                        id="style2FileInput"
+                      />
+                      <label class="file-picker" for="style2FileInput">
+                        <span class="file-trigger">选择文件</span>
+                        <span class="file-name" id="style2FileName">未选择任何文件</span>
+                      </label>
+                    </div>
+
+                    <label class="field">
+                      <span>图片链接（可多行）</span>
+                      <textarea
+                        name="reference_url"
+                        rows="2"
+                        placeholder="https://... 每行一个，合计最多 10 张"
+                        id="style2UrlInput"
+                      ></textarea>
+                    </label>
+
+                    <div class="reference-preview">
+                      <div class="reference-preview__image" id="style2PreviewImage">
+                        <span>未选择参考图</span>
+                      </div>
+                      <p class="reference-preview__meta" id="style2PreviewMeta">
+                        可上传本地图片，或填写图片链接。
+                      </p>
+                    </div>
+                  </fieldset>
+                </div>
+              </form>
+            </article>
+
+            <article class="page-card page-card--dark task-board-card">
+              <div class="section-heading section-heading--tight">
+                <p class="eyebrow">运行状态</p>
+                <h3>任务看板</h3>
+              </div>
+
+              <div class="task-board-summary">
+                <div class="task-stat">
+                  <span>共享并发池</span>
+                  <strong id="replicate2TaskSharedPoolValue">-</strong>
+                </div>
+                <div class="task-stat">
+                  <span>单条出图数</span>
+                  <strong id="replicate2TaskImagesPerPromptValue">-</strong>
+                </div>
+                <div class="task-stat">
+                  <span>当前状态</span>
+                  <strong id="replicate2TaskJobStatusValue">空闲</strong>
+                </div>
+                <div class="task-stat">
+                  <span>最近更新</span>
+                  <strong id="replicate2TaskUpdatedAtValue">-</strong>
+                </div>
+              </div>
+
+              <div id="replicate2TaskBoard" class="task-board">
+                <p class="muted-copy">提交后任务会以紧凑卡片的形式出现在这里。</p>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page-view" data-view="image-edit">
+          <article class="page-card page-card--dark edit-workspace">
+            <aside class="edit-sidebar" aria-label="图片生成会话">
+              <div class="edit-sidebar__head">
+                <div>
+                  <p class="eyebrow">图片生成</p>
+                  <h2>会话</h2>
+                </div>
+                <button class="secondary-action secondary-action--small" type="button" id="editNewConversationButton">
+                  新对话
+                </button>
+              </div>
+
+              <div class="edit-sidebar__section edit-sidebar__section--conversations">
+                <p class="edit-sidebar__label">当前会话</p>
+                <div class="edit-chat-list" id="editConversationList"></div>
+              </div>
+
+              <div class="edit-sidebar__section edit-sidebar__section--history">
+                <p class="edit-sidebar__label">历史</p>
+                <div class="edit-history-list" id="editHistoryList"></div>
+              </div>
+            </aside>
+
+            <section class="edit-chat-panel" aria-label="图片生成会话流">
+              <header class="edit-chat-header">
+                <div>
+                  <p class="eyebrow">多轮生成</p>
+                  <h2 id="editConversationTitle">图片生成</h2>
+                  <p class="section-copy" id="editConversationMeta">
+                    可以粘贴、拖拽、选择图片；Agent 可直接回复文字，也可按需生成图片。
+                  </p>
+                </div>
+                <button class="secondary-action" type="button" id="editOpenDataButton">
+                  打开数据目录
+                </button>
+              </header>
+
+              <div class="edit-chat-stream" id="editConversationStream">
+                <div class="edit-empty-state">
+                  <p>把图片粘贴到下方输入框，或者拖进来开始。</p>
+                </div>
+              </div>
+
+              <form id="imageEditForm" class="edit-composer">
+                <input
+                  class="file-input"
+                  type="file"
+                  name="input_files"
+                  accept="image/*"
+                  id="editFilesInput"
+                  multiple
+                />
+
+                <div class="edit-mode-toggle" role="group" aria-label="图片生成模式">
+                  <button class="edit-mode-toggle__button is-active" type="button" data-edit-mode="normal">
+                    普通模式
+                  </button>
+                  <button class="edit-mode-toggle__button" type="button" data-edit-mode="agent">
+                    Agent 模式
+                  </button>
+                </div>
+
+                <div class="edit-drop-zone" id="editDropZone" tabindex="0">
+                  <div class="edit-preview-grid" id="editPreviewGrid">
+                    <p class="muted-copy">粘贴图片、拖拽图片，或点击“加图片”。</p>
+                  </div>
+
+                  <textarea
+                    name="prompt"
+                    id="editPromptInput"
+                    rows="3"
+                    placeholder="描述要怎么编辑图片。可以连续发送多次，每次都会新建一个生成任务。"
+                  ></textarea>
+
+                  <div class="edit-composer__footer">
+                    <p class="edit-agent-note" id="editAgentNote" hidden>
+                      Agent 模式会先判断是否需要生图；普通对话会直接回复，需要生成时再自动决定张数、分辨率和比例。
+                    </p>
+                    <div class="edit-composer__tools">
+                      <button class="secondary-action secondary-action--small" type="button" id="editPickFilesButton">
+                        加图片
+                      </button>
+                      <label class="edit-aspect-field">
+                        <span>模型</span>
+                        <select name="image_model" required></select>
+                      </label>
+                      <label class="edit-aspect-field">
+                        <span>分辨率</span>
+                        <select name="output_resolution" required></select>
+                      </label>
+                      <label class="edit-aspect-field">
+                        <span>比例</span>
+                        <select name="output_aspect_ratio" required></select>
+                      </label>
+                      <label class="edit-aspect-field edit-count-field">
+                        <span>生成次数</span>
+                        <input name="images_per_prompt" type="number" min="1" step="1" required />
+                      </label>
+                      <span class="file-name" id="editFilesName">未选择图片</span>
+                    </div>
+                    <button class="primary-action edit-send-button" type="submit">
+                      发送
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </section>
+          </article>
+        </section>
+
+        <section class="page-view" data-view="color-match">
+          <div class="page-section-stack">
+            <article class="page-card page-card--dark form-card">
+              <div class="section-heading section-heading--tight">
+                <p class="eyebrow">色彩工作流</p>
+                <h2>一键追色</h2>
+                <p class="section-copy">
+                  上传色调参考图和要追色的静物场景图，系统会先分析色板并去色，再并发生成两版追色结果。
+                </p>
+              </div>
+
+              <form id="colorMatchForm" class="task-form">
+                <div class="task-toolbar">
+                  <label class="field">
+                    <span>分辨率</span>
+                    <select name="output_resolution" required></select>
+                  </label>
+
+                  <label class="field">
+                    <span>比例</span>
+                    <select name="output_aspect_ratio" required></select>
+                  </label>
+
+                  <div class="toolbar-actions">
+                    <button class="primary-action" type="submit">开始追色</button>
+                    <button class="secondary-action" type="button" id="colorOpenDataButton">
+                      打开数据目录
+                    </button>
+                  </div>
+                </div>
+
+                <div class="reference-grid">
+                  <fieldset class="reference-card">
+                    <legend>色调参考图</legend>
+                    <div class="reference-card__top">
+                      <span class="reference-tag">提取核心色板</span>
+                    </div>
+
+                    <div class="field">
+                      <span>本地上传</span>
+                      <input
+                        class="file-input"
+                        type="file"
+                        name="tone_file"
+                        accept="image/*"
+                        id="colorToneFileInput"
+                        required
+                      />
+                      <label class="file-picker" for="colorToneFileInput">
+                        <span class="file-trigger">选择文件</span>
+                        <span class="file-name" id="colorToneFileName">未选择任何文件</span>
+                      </label>
+                    </div>
+
+                    <div class="reference-preview">
+                      <div class="reference-preview__image" id="colorTonePreviewImage">
+                        <span>未选择色调参考图</span>
+                      </div>
+                      <p class="reference-preview__meta" id="colorTonePreviewMeta">
+                        用于大模型色彩分析和 1K / 4:3 色板信息图生成。
+                      </p>
+                    </div>
+                  </fieldset>
+
+                  <fieldset class="reference-card">
+                    <legend>静物场景图</legend>
+                    <div class="reference-card__top">
+                      <span class="reference-tag">先去色再追色</span>
+                    </div>
+
+                    <div class="field">
+                      <span>本地上传</span>
+                      <input
+                        class="file-input"
+                        type="file"
+                        name="scene_file"
+                        accept="image/*"
+                        id="colorSceneFileInput"
+                        required
+                      />
+                      <label class="file-picker" for="colorSceneFileInput">
+                        <span class="file-trigger">选择文件</span>
+                        <span class="file-name" id="colorSceneFileName">未选择任何文件</span>
+                      </label>
+                    </div>
+
+                    <div class="reference-preview">
+                      <div class="reference-preview__image" id="colorScenePreviewImage">
+                        <span>未选择静物场景图</span>
+                      </div>
+                      <p class="reference-preview__meta" id="colorScenePreviewMeta">
+                        后端会先生成灰度图，再用色彩分析结果并发上色。
+                      </p>
+                    </div>
+                  </fieldset>
+                </div>
+              </form>
+            </article>
+
+            <article class="page-card page-card--dark task-board-card">
+              <div class="section-heading section-heading--tight">
+                <p class="eyebrow">运行状态</p>
+                <h3>追色任务看板</h3>
+              </div>
+
+              <div class="task-board-summary">
+                <div class="task-stat">
+                  <span>共享并发池</span>
+                  <strong id="colorTaskSharedPoolValue">-</strong>
+                </div>
+                <div class="task-stat">
+                  <span>结果尺寸</span>
+                  <strong id="colorTaskOutputValue">-</strong>
+                </div>
+                <div class="task-stat">
+                  <span>当前状态</span>
+                  <strong id="colorTaskJobStatusValue">空闲</strong>
+                </div>
+                <div class="task-stat">
+                  <span>最近更新</span>
+                  <strong id="colorTaskUpdatedAtValue">-</strong>
+                </div>
+              </div>
+
+              <div id="colorTaskBoard" class="task-board">
+                <p class="muted-copy">提交后追色任务会出现在这里。</p>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="page-view" data-view="history">
+          <article class="page-card page-card--dark">
+            <div class="section-heading section-heading--tight">
+              <p class="eyebrow">任务归档</p>
+              <h2>历史</h2>
+              <p class="section-copy">历史里看预览图、放大查看、按任务下载图片或任务包。</p>
+            </div>
+            <div id="historyList" class="history-list"></div>
+          </article>
+        </section>
+
+        <section class="page-view" data-view="settings">
+          <form id="settingsForm" class="page-section-stack">
+            <article class="page-card page-card--dark settings-main-card">
+              <div class="section-heading section-heading--split">
+                <div>
+                  <p class="eyebrow">参数维护</p>
+                  <h2>设置</h2>
+                  <p class="section-copy">
+                    设置有改动就自动保存。数量、尺寸在任务页输入，系统提示词和请求参数在这里维护。
+                  </p>
+                </div>
+                <span class="status-pill status-pill--soft" id="autosaveBadgeInline">已同步</span>
+              </div>
+
+              <div class="settings-stack__sections">
+                <fieldset class="settings-block settings-block--compact">
+                  <legend>提示词/通用大模型</legend>
+
+                  <label class="field">
+                    <span>API Base</span>
+                    <input type="text" name="llm_api_base" />
+                  </label>
+
+                  <label class="field">
+                    <span>API Key</span>
+                    <input type="password" name="llm_api_key" />
+                  </label>
+
+                  <label class="field">
+                    <span>提示词模型</span>
+                    <input type="text" name="chat_model" />
+                  </label>
+                </fieldset>
+
+                <fieldset class="settings-block settings-block--compact">
+                  <legend>追色大模型</legend>
+
+                  <label class="field">
+                    <span>API Base</span>
+                    <input type="text" name="color_match_api_base" />
+                  </label>
+
+                  <label class="field">
+                    <span>API Key</span>
+                    <input type="password" name="color_match_api_key" />
+                  </label>
+
+                  <label class="field">
+                    <span>模型 ID</span>
+                    <input type="text" name="color_match_model" />
+                  </label>
+                </fieldset>
+
+                <fieldset class="settings-block settings-block--compact">
+                  <legend>Agent 大模型</legend>
+
+                  <label class="field">
+                    <span>API Base</span>
+                    <input type="text" name="image_agent_api_base" />
+                  </label>
+
+                  <label class="field">
+                    <span>API Key</span>
+                    <input type="password" name="image_agent_api_key" />
+                  </label>
+
+                  <label class="field">
+                    <span>模型 ID</span>
+                    <input type="text" name="image_agent_model" />
+                  </label>
+
+                  <label class="field">
+                    <span>Agent API</span>
+                    <select name="image_agent_endpoint_type">
+                      <option value="chat_completions">/v1/chat/completions</option>
+                      <option value="responses">/v1/responses</option>
+                    </select>
+                  </label>
+                </fieldset>
+
+                <fieldset class="settings-block settings-block--compact">
+                  <legend>大模型通用请求参数</legend>
+
+                  <label class="field field--checkbox field--full">
+                    <input type="checkbox" name="use_system_proxy" />
+                    <span>使用系统代理</span>
+                  </label>
+
+                  <label class="field">
+                    <span>Reasoning Effort</span>
+                    <select name="reasoning_effort">
+                      <option value="none">none</option>
+                      <option value="low">low</option>
+                      <option value="medium">medium</option>
+                      <option value="high">high</option>
+                      <option value="xhigh">xhigh</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span>Reasoning 格式</span>
+                    <select name="reasoning_wire_format">
+                      <option value="reasoning_effort">reasoning_effort</option>
+                      <option value="reasoning">reasoning</option>
+                    </select>
+                  </label>
+
+                  <label class="field">
+                    <span>连接超时 (s)</span>
+                    <input type="number" name="llm_connect_timeout_seconds" min="1" />
+                  </label>
+
+                  <label class="field">
+                    <span>读取超时 (s)</span>
+                    <input type="number" name="chat_read_timeout_seconds" min="0" />
+                  </label>
+
+                  <label class="field">
+                    <span>重试次数</span>
+                    <input type="number" name="llm_retry_count" min="0" />
+                  </label>
+
+                  <label class="field">
+                    <span>Chat Max Tokens</span>
+                    <input type="number" name="chat_max_tokens" min="0" />
+                  </label>
+                </fieldset>
+
+                <fieldset class="settings-block settings-block--compact">
+                  <legend>默认生图模型</legend>
+
+                  <label class="field">
+                    <span>默认生图模型</span>
+                    <select name="image_model"></select>
+                  </label>
+                </fieldset>
+
+                <fieldset class="settings-block settings-block--compact">
+                  <legend>gpt-image-2 1K</legend>
+
+                  <label class="field">
+                    <span>API Base</span>
+                    <input type="text" name="gpt_image_1k_api_base" />
+                  </label>
+
+                  <label class="field">
+                    <span>API Key</span>
+                    <input type="password" name="gpt_image_1k_api_key" />
+                  </label>
+
+                  <label class="field">
+                    <span>模型 ID</span>
+                    <input type="text" name="image_model_gpt_image_2_1k" />
+                  </label>
+                </fieldset>
+
+                <fieldset class="settings-block settings-block--compact">
+                  <legend>gpt-image-2 2K/4K</legend>
+
+                  <label class="field">
+                    <span>API Base</span>
+                    <input type="text" name="gpt_image_api_base" />
+                  </label>
+
+                  <label class="field">
+                    <span>API Key</span>
+                    <input type="password" name="gpt_image_api_key" />
+                  </label>
+
+                  <label class="field">
+                    <span>模型 ID</span>
+                    <input type="text" name="image_model_gpt_image_2" />
+                  </label>
+                </fieldset>
+
+                <fieldset class="settings-block settings-block--compact">
+                  <legend>Gemini / Nano Banana</legend>
+
+                  <label class="field">
+                    <span>API Base</span>
+                    <input type="text" name="gemini_image_api_base" />
+                  </label>
+
+                  <label class="field">
+                    <span>API Key</span>
+                    <input type="password" name="gemini_image_api_key" />
+                  </label>
+                </fieldset>
+
+                <fieldset class="settings-block settings-block--compact">
+                  <legend>生图通用请求参数</legend>
+
+                  <label class="field">
+                    <span>连接超时 (s)</span>
+                    <input type="number" name="image_connect_timeout_seconds" min="1" />
+                  </label>
+
+                  <label class="field">
+                    <span>生图读取超时 (s)</span>
+                    <input type="number" name="image_read_timeout_seconds" min="0" />
+                  </label>
+
+                  <label class="field">
+                    <span>下载读取超时 (s)</span>
+                    <input type="number" name="download_read_timeout_seconds" min="0" />
+                  </label>
+
+                  <label class="field">
+                    <span>重试次数</span>
+                    <input type="number" name="image_retry_count" min="0" />
+                  </label>
+                </fieldset>
+
+                <fieldset class="settings-block settings-block--compact">
+                  <legend>默认任务参数</legend>
+
+                  <label class="field">
+                    <span>默认提示词数</span>
+                    <input type="number" name="default_prompt_count" min="1" />
+                  </label>
+
+                  <label class="field">
+                    <span>默认分辨率</span>
+                    <select name="default_output_resolution"></select>
+                  </label>
+
+                  <label class="field">
+                    <span>默认比例</span>
+                    <select name="default_output_aspect_ratio"></select>
+                  </label>
+
+                  <label class="field">
+                    <span>默认生成次数</span>
+                    <input type="number" name="default_images_per_prompt" min="1" />
+                  </label>
+
+                  <label class="field">
+                    <span>共享并发池大小</span>
+                    <input type="number" name="default_concurrency" min="1" />
+                  </label>
+                </fieldset>
+              </div>
+            </article>
+
+            <article class="page-card page-card--dark settings-prompt-card">
+              <div class="section-heading section-heading--tight">
+                <p class="eyebrow">提示词模板</p>
+                <h2>提示词模板</h2>
+                <p class="section-copy">
+                  修改后自动保存。任务页留空时会使用默认用户提示词，数量要求仍会自动映射。
+                </p>
+              </div>
+
+              <label class="field field--full">
+                <span>默认用户提示词</span>
+                <textarea name="default_user_prompt" rows="14" class="prompt-editor"></textarea>
+              </label>
+
+              <label class="field field--full">
+                <span>复刻风格图片2用户提示词</span>
+                <textarea name="style_replicate2_user_prompt" rows="14" class="prompt-editor"></textarea>
+              </label>
+
+              <label class="field field--full">
+                <span>图片 Agent 规划提示词</span>
+                <textarea name="image_agent_planner_prompt" rows="12" class="prompt-editor"></textarea>
+              </label>
+
+              <label class="field field--full">
+                <span>图片 Agent 创作提示词</span>
+                <textarea name="image_agent_creator_prompt" rows="14" class="prompt-editor"></textarea>
+              </label>
+
+              <label class="field field--full">
+                <span>系统提示词内容</span>
+                <textarea name="system_prompt" rows="20" class="prompt-editor"></textarea>
+              </label>
+
+              <label class="field field--full">
+                <span>复刻风格图片2系统提示词</span>
+                <textarea name="style_replicate2_system_prompt" rows="20" class="prompt-editor"></textarea>
+              </label>
+            </article>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <div class="modal-shell" id="logModal" hidden>
+      <div class="modal-backdrop" data-close-log-modal></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="logModalTitle">
+        <header class="modal-header">
+          <div>
+            <p class="eyebrow">诊断信息</p>
+            <h2 id="logModalTitle">日志</h2>
+          </div>
+          <div class="modal-actions">
+            <button class="secondary-action" type="button" id="refreshLogsButton">刷新</button>
+            <button class="secondary-action" type="button" id="openLogsFolderButton">
+              打开日志目录
+            </button>
+            <button class="icon-button icon-button--quiet" type="button" data-close-log-modal>
+              关闭
+            </button>
+          </div>
+        </header>
+
+        <div class="log-modal-grid">
+          <aside class="log-list" id="logEntryTabs"></aside>
+          <section class="log-detail">
+            <div class="log-detail__meta">
+              <p id="logEntryTitle">日志详情</p>
+              <p id="logEntryPath" class="muted-copy"></p>
+            </div>
+            <pre class="log-console" id="logModalContent">等待加载日志...</pre>
+          </section>
+        </div>
+      </section>
+    </div>
+
+    <div class="modal-shell" id="imageModal" hidden>
+      <div class="modal-backdrop" data-close-image-modal></div>
+      <section
+        class="modal-panel modal-panel--image"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="imageModalTitle"
+      >
+        <header class="modal-header">
+          <div>
+            <p class="eyebrow">图片预览</p>
+            <h2 id="imageModalTitle">大图查看</h2>
+          </div>
+          <div class="modal-actions">
+            <button class="secondary-action" type="button" id="imageModalDownloadCurrentButton">
+              下载当前
+            </button>
+            <button
+              class="secondary-action"
+              type="button"
+              id="imageModalDownloadAllButton"
+              hidden
+            >
+              下载全部
+            </button>
+            <button
+              class="secondary-action"
+              type="button"
+              id="imageModalSelectDownloadButton"
+              hidden
+            >
+              网格选择
+            </button>
+            <button class="icon-button icon-button--quiet" type="button" data-close-image-modal>
+              关闭
+            </button>
+          </div>
+        </header>
+
+        <figure class="image-viewer">
+          <div class="image-viewer__stage">
+            <button
+              class="image-nav-button"
+              type="button"
+              id="imageModalPrevButton"
+              aria-label="上一张"
+              hidden
+            >
+              <span aria-hidden="true">&lsaquo;</span>
+            </button>
+            <div class="image-viewer__viewport">
+              <img id="imageModalContent" alt="" />
+              <div
+                class="image-context-menu"
+                id="imageModalContextMenu"
+                role="menu"
+                aria-label="图片操作"
+                hidden
+              >
+                <button type="button" id="imageModalSaveAsButton" role="menuitem">
+                  另存为
+                </button>
+                <button type="button" id="imageModalCopyButton" role="menuitem">
+                  复制图片
+                </button>
+              </div>
+            </div>
+            <button
+              class="image-nav-button"
+              type="button"
+              id="imageModalNextButton"
+              aria-label="下一张"
+              hidden
+            >
+              <span aria-hidden="true">&rsaquo;</span>
+            </button>
+          </div>
+          <figcaption class="image-viewer__meta">
+            <span id="imageModalCounter" class="image-viewer__counter"></span>
+            <span id="imageModalCaption" class="muted-copy"></span>
+          </figcaption>
+        </figure>
+      </section>
+    </div>
+
+    <template id="historyCardTemplate">
+      <article class="history-card">
+        <div class="history-card__meta">
+          <span class="history-card__time"></span>
+          <span class="history-card__status"></span>
+        </div>
+
+        <div class="history-card__body">
+          <div>
+            <h3 class="history-card__title"></h3>
+            <p class="history-card__detail"></p>
+          </div>
+
+          <div class="history-card__actions">
+            <button class="secondary-action history-download-images" type="button">下载全部图片</button>
+            <button class="secondary-action history-select-download" type="button">选择下载</button>
+            <button class="secondary-action history-download-package" type="button">下载任务包</button>
+            <button class="secondary-action history-delete" type="button">删除</button>
+          </div>
+        </div>
+
+        <div class="history-card__thumbs"></div>
+      </article>
+    </template>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>

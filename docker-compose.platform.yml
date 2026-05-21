@@ -1,0 +1,25 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.platform
+    container_name: design-output-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./platform_runtime:/app/platform_runtime
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.platform
+    container_name: design-output-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./platform_runtime:/app/platform_runtime
+    command: ["python", "-m", "platform_backend.app.worker"]

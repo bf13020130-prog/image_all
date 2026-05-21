@@ -1,0 +1,56 @@
+{
+  "appId": "local.design.output",
+  "npmRebuild": false,
+  "productName": "设计出图",
+  "asar": true,
+  "directories": {
+    "output": "dist-electron-backend-exe"
+  },
+  "files": [
+    "electron/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "electron/icon.ico",
+      "to": "icon.ico"
+    },
+    {
+      "from": "runtime/backend-exe",
+      "to": "backend-exe"
+    },
+    {
+      "from": "config.example.json",
+      "to": "config.example.json"
+    },
+    {
+      "from": "runtime/seed-config.json",
+      "to": "seed-config.json"
+    },
+    {
+      "from": "web",
+      "to": "web"
+    },
+    {
+      "from": "electron/watchdog.js",
+      "to": "watchdog.js"
+    },
+    {
+      "from": "compat-mode.flag",
+      "to": "compat-mode.flag"
+    }
+  ],
+  "win": {
+    "icon": "electron/icon.ico",
+    "signAndEditExecutable": false,
+    "target": [
+      {
+        "target": "portable",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "artifactName": "设计出图-${version}-win11-backend-exe-20260514.${ext}"
+  }
+}
