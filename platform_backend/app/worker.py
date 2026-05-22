@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import time
 import threading
-from pathlib import Path
 
 from .config import CONFIG
 from .database import init_db
@@ -17,11 +17,18 @@ def run_job(job: dict) -> None:
     user_id = job["user_id"]
     if CONFIG.pipeline_enabled:
         result = run_pipeline_job(job)
+        record = result.get("record") if isinstance(result.get("record"), dict) else {}
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        status = str(record.get("status") or summary.get("status") or "completed")
+        error = str(record.get("error") or summary.get("error") or "")
+        if status not in {"completed", "partial", "failed"}:
+            status = "failed" if error else "completed"
         finish_job(
             job_id=job_id,
             user_id=user_id,
-            status="completed",
+            status=status,
             result=result,
+            error=error,
         )
         return
 
@@ -67,18 +74,10 @@ def run_forever(
     cleanup_expired_job_history(retention_days=CONFIG.history_retention_days)
     cleanup_interval_seconds = max(3600, int(CONFIG.history_cleanup_interval_hours) * 3600)
     last_cleanup = time.monotonic()
-    while not (stop_event and stop_event.is_set()):
-        if time.monotonic() - last_cleanup >= cleanup_interval_seconds:
-            cleanup_old_downloads()
-            cleanup_expired_job_history(retention_days=CONFIG.history_retention_days)
-            last_cleanup = time.monotonic()
-        job = claim_next_job()
-        if not job:
-            if stop_event:
-                stop_event.wait(CONFIG.worker_poll_seconds)
-            else:
-                time.sleep(CONFIG.worker_poll_seconds)
-            continue
+    max_workers = max(1, int(CONFIG.worker_concurrency))
+    futures = {}
+
+    def run_job_safely(job: dict) -> None:
         try:
             run_job(job)
         except Exception as exc:
@@ -90,6 +89,39 @@ def run_forever(
                 error=str(exc),
                 progress=100,
             )
+
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="platform-worker") as executor:
+        while True:
+            if time.monotonic() - last_cleanup >= cleanup_interval_seconds:
+                cleanup_old_downloads()
+                cleanup_expired_job_history(retention_days=CONFIG.history_retention_days)
+                last_cleanup = time.monotonic()
+
+            should_stop = bool(stop_event and stop_event.is_set())
+            while not should_stop and len(futures) < max_workers:
+                job = claim_next_job()
+                if not job:
+                    break
+                futures[executor.submit(run_job_safely, job)] = job
+
+            if should_stop and not futures:
+                break
+
+            if futures:
+                done, _pending = wait(
+                    futures,
+                    timeout=CONFIG.worker_poll_seconds,
+                    return_when=FIRST_COMPLETED,
+                )
+                for future in done:
+                    futures.pop(future, None)
+                    future.result()
+                continue
+
+            if stop_event:
+                stop_event.wait(CONFIG.worker_poll_seconds)
+            else:
+                time.sleep(CONFIG.worker_poll_seconds)
 
 
 if __name__ == "__main__":

@@ -142,7 +142,7 @@ const SETTINGS_SECTIONS = [
         optionsKey: "available_output_aspect_ratios",
       },
       { key: "default_images_per_prompt", label: "默认生成次数", type: "number", min: 1 },
-      { key: "default_concurrency", label: "共享并发池大小", type: "number", min: 1, maxKey: "max_shared_concurrency" },
+      { key: "default_concurrency", label: "默认单任务并发", type: "number", min: 1, maxKey: "max_shared_concurrency" },
     ],
   },
   {
@@ -332,7 +332,7 @@ function renderUser(user) {
       <div class="item-row">
         <div>
           <strong>${escapeHtml(user.username)} · ${escapeHtml(user.display_name || "")}</strong>
-          <small>${escapeHtml(user.role)} · ${escapeHtml(user.status)} · 存储 ${mb(user.storage_bytes)} MB / ${quota.storage_limit_mb || 0} MB · 并发 ${quota.concurrent_limit || 1}</small>
+          <small>${escapeHtml(user.role)} · ${escapeHtml(user.status)} · 存储 ${mb(user.storage_bytes)} MB / ${quota.storage_limit_mb || 0} MB · 并发 ${quota.concurrent_limit || 20}</small>
         </div>
         <div class="item-actions">
           <button class="ghost" data-action="user-logs" data-user-id="${user.id}" data-username="${escapeHtml(user.username)}">任务日志</button>
@@ -411,7 +411,7 @@ async function createUser() {
     display_name: form.get("display_name"),
     password: password || null,
     role: form.get("role"),
-    concurrent_limit: Number(form.get("concurrent_limit") || 1),
+    concurrent_limit: Number(form.get("concurrent_limit") || 20),
     storage_limit_mb: Number(form.get("storage_limit_mb") || 10240),
   };
   const result = await api("/api/v1/admin/users", {

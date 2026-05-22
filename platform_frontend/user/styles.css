@@ -2395,5 +2395,9 @@ body::before {
 }
 
 .platform-top-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
   text-decoration: none;
 }

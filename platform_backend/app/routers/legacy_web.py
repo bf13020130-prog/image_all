@@ -19,22 +19,34 @@ from ..settings_service import (
     save_user_settings,
 )
 from ..storage_service import delete_job_storage, save_uploads
-from ..task_service import create_job, finish_job, get_job, list_jobs, update_job_payload
+from ..task_service import create_job, finish_job, get_job, get_user_quota, list_jobs, update_job_payload
 from ..task_service import count_running_jobs
+from ..config import CONFIG
 
 
 router = APIRouter(prefix="/api", tags=["legacy-web"])
 
 
-def _shared_pool(user_id: str) -> dict[str, int]:
+def _shared_pool(user_id: str) -> dict[str, int | str]:
     settings = public_settings_for_user(user_id)["effective"]
-    capacity = max(1, int(settings.get("default_concurrency") or 1))
+    quota = get_user_quota(user_id)
+    capacity = max(1, int(quota.get("concurrent_limit") or 20))
     used = min(capacity, count_running_jobs(user_id))
+    task_concurrency = max(1, int(settings.get("default_concurrency") or 1))
+    worker_capacity = max(1, int(CONFIG.worker_concurrency))
+    running = sum(
+        1 for item in list_jobs(status="running", limit=worker_capacity + 50)
+        if item.get("status") == "running"
+    )
     return {
         "size": capacity,
         "capacity": capacity,
         "used": used,
         "available": max(0, capacity - used),
+        "task_concurrency": min(task_concurrency, capacity),
+        "worker_capacity": worker_capacity,
+        "worker_used": min(worker_capacity, running),
+        "worker_available": max(0, worker_capacity - running),
     }
 
 

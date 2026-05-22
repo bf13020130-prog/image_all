@@ -909,6 +909,7 @@ function getSharedPoolDisplay() {
   const capacity =
     Number(state.sharedPool?.capacity) ||
     Number(state.settings?.default_concurrency) ||
+    Number(state.sharedPool?.size) ||
     0;
   const available =
     state.sharedPool && Number.isFinite(Number(state.sharedPool.available))
@@ -922,8 +923,11 @@ function getSharedPoolDisplay() {
 
 function renderTopStatus() {
   const poolText = getSharedPoolDisplay();
+  const workerCapacity = Number(state.sharedPool?.worker_capacity) || 0;
+  const workerAvailable = Number(state.sharedPool?.worker_available) || 0;
+  const workerText = workerCapacity ? `，执行 ${workerAvailable} / ${workerCapacity}` : "";
   refs.sharedPoolBadge.textContent =
-    poolText === "-" ? "共享并发池 -" : `共享并发池 ${poolText} 可用`;
+    poolText === "-" ? "任务额度 -" : `任务额度 ${poolText} 可提交${workerText}`;
 }
 
 function renderTaskMetrics() {
@@ -996,22 +1000,25 @@ function renderTaskBoard() {
   renderTaskBoardFor({
     board: refs.taskBoard,
     taskKey: "style-replicate",
+    statuses: ["queued", "running", "failed", "partial"],
     emptyText: "提交后复刻风格图片任务会出现在这里。",
   });
   renderTaskBoardFor({
     board: refs.replicate2TaskBoard,
     taskKey: "style-replicate-v2",
+    statuses: ["queued", "running", "failed", "partial"],
     emptyText: "提交后复刻风格图片2任务会出现在这里。",
   });
   renderTaskBoardFor({
     board: refs.editTaskBoard,
     taskKey: ["image-edit", "image-agent"],
-    statuses: ["queued", "running"],
-    emptyText: "当前没有运行中的图片生成任务。",
+    statuses: ["queued", "running", "failed", "partial"],
+    emptyText: "当前没有运行中或刚失败的图片生成任务。",
   });
   renderTaskBoardFor({
     board: refs.colorTaskBoard,
     taskKey: "color-match",
+    statuses: ["queued", "running", "failed", "partial"],
     emptyText: "提交后追色任务会出现在这里。",
   });
 }
@@ -1157,6 +1164,47 @@ function normalizePersistedEditConversations(source) {
     })
     .filter((conversation) => conversation.messages.length > 0)
     .slice(0, 30);
+}
+
+function syncEditMessagesFromJobs() {
+  if (!Array.isArray(state.editConversations) || !Array.isArray(state.jobs)) {
+    return false;
+  }
+  let changed = false;
+  state.editConversations.forEach((conversation) => {
+    (conversation.messages || []).forEach((message) => {
+      if (!message.jobId) {
+        return;
+      }
+      const job = state.jobs.find((item) => item.job_id === message.jobId);
+      if (!job) {
+        return;
+      }
+      if (message.status !== job.status) {
+        message.status = job.status;
+        changed = true;
+      }
+      if (job.error && message.error !== job.error) {
+        message.error = job.error;
+        changed = true;
+      }
+      const previewItems = getJobPreviewItems(job);
+      const previewUrls = previewItems.map((item) => item.url);
+      if (previewUrls.length && !arraysEqual(message.resultUrls || [], previewUrls)) {
+        message.resultUrls = previewUrls;
+        changed = true;
+      }
+      const previewThumbnailUrls = previewItems.map((item) => item.thumbnailUrl);
+      if (
+        previewThumbnailUrls.length &&
+        !arraysEqual(message.resultThumbnailUrls || [], previewThumbnailUrls)
+      ) {
+        message.resultThumbnailUrls = previewThumbnailUrls;
+        changed = true;
+      }
+    });
+  });
+  return changed;
 }
 
 function serializeEditConversations() {
@@ -1415,7 +1463,12 @@ function reconstructEditConversationsFromHistory(records = []) {
       jobId: null,
       runId: typeof record?.run_id === "string" ? record.run_id : null,
       status: typeof record?.status === "string" ? record.status : "completed",
-      error: typeof record?.error === "string" ? record.error : "",
+      error:
+        typeof record?.error === "string" && record.error
+          ? record.error
+          : typeof summary?.error === "string"
+            ? summary.error
+            : "",
       agentResponseText,
       agentSummary: summary?.agent || null,
       resultUrls: latestResultItems.map((item) => item.url),
@@ -2035,6 +2088,9 @@ function buildEditMessage(message, job) {
           <button class="secondary-action secondary-action--small" type="button" data-rerun-message>
             重新生成
           </button>
+          <button class="secondary-action secondary-action--small" type="button" data-edit-message>
+            重新编辑
+          </button>
           <button class="secondary-action secondary-action--small" type="button" data-copy-prompt>
             复制提示词
           </button>
@@ -2138,7 +2194,7 @@ function buildEditMessage(message, job) {
         <span class="task-box__spinner" aria-hidden="true"></span>
         <div>
           <strong>正在生成</strong>
-          <p>请求已进入共享并发池，可以继续发送下一条。</p>
+          <p>请求已进入任务队列；Worker 有空位会立即执行，可以继续发送下一条。</p>
         </div>
       </div>
     `;
@@ -2156,6 +2212,10 @@ function buildEditMessage(message, job) {
   const rerunButton = wrapper.querySelector("[data-rerun-message]");
   rerunButton?.addEventListener("click", () => {
     void rerunEditMessage(message.id);
+  });
+  const editButton = wrapper.querySelector("[data-edit-message]");
+  editButton?.addEventListener("click", () => {
+    void editEditMessage(message.id);
   });
   const copyPromptButton = wrapper.querySelector("[data-copy-prompt]");
   copyPromptButton?.addEventListener("click", () => {
@@ -4040,6 +4100,80 @@ async function rerunEditMessage(messageId) {
   });
 }
 
+function setSelectValue(select, value, fallback = "") {
+  if (!select) {
+    return;
+  }
+  const desired = String(value || "").trim();
+  const fallbackValue = String(fallback || "").trim();
+  const values = Array.from(select.options || []).map((option) => option.value);
+  if (desired && values.includes(desired)) {
+    select.value = desired;
+  } else if (fallbackValue && values.includes(fallbackValue)) {
+    select.value = fallbackValue;
+  }
+}
+
+async function editEditMessage(messageId) {
+  const conversation = getActiveEditConversation();
+  const sourceMessage = conversation?.messages?.find((message) => message.id === messageId);
+  if (!conversation || !sourceMessage) {
+    return;
+  }
+
+  const attachments = await filesFromEditMessage(sourceMessage);
+  const inputCount = Number.isFinite(Number(sourceMessage.inputCount))
+    ? Math.max(0, Number.parseInt(sourceMessage.inputCount, 10))
+    : Array.isArray(sourceMessage.attachments)
+      ? sourceMessage.attachments.length
+      : 0;
+  if (inputCount > 0 && !attachments.length) {
+    window.alert("这条记录没有可复用的输入图。请把结果图拖回输入框，或重新上传图片后再编辑。");
+  }
+
+  refs.editPromptInput.value = sourceMessage.prompt || "";
+  setEditGenerationMode(sourceMessage.mode === "agent" ? "agent" : "normal");
+  setSelectValue(
+    refs.imageEditForm.elements.namedItem("image_model"),
+    sourceMessage.imageModel,
+    state.settings?.image_model || IMAGE_MODEL_GPT_IMAGE_2
+  );
+  setSelectValue(
+    refs.imageEditForm.elements.namedItem("output_resolution"),
+    sourceMessage.outputResolution,
+    state.settings?.default_output_resolution || "auto"
+  );
+  setSelectValue(
+    refs.imageEditForm.elements.namedItem("output_aspect_ratio"),
+    sourceMessage.outputAspectRatio,
+    state.settings?.default_output_aspect_ratio || "auto"
+  );
+  const countInput = refs.imageEditForm.elements.namedItem("images_per_prompt");
+  if (countInput) {
+    countInput.value = String(
+      normalizeEditImagesPerPrompt(
+        sourceMessage.imagesPerPrompt || state.settings?.default_images_per_prompt || 1
+      )
+    );
+  }
+
+  state.editInputAttachments.forEach((attachment) => {
+    URL.revokeObjectURL(attachment.url);
+  });
+  state.editInputAttachments = attachments.map((attachment) => ({
+    file: attachment.file,
+    name: attachment.name,
+    url: URL.createObjectURL(attachment.file),
+  }));
+  renderEditPreview();
+  setRoute("image-edit");
+  refs.editPromptInput.focus();
+  refs.editPromptInput.setSelectionRange(
+    refs.editPromptInput.value.length,
+    refs.editPromptInput.value.length
+  );
+}
+
 async function filesFromEditMessage(message) {
   const files = [];
   for (const [index, attachment] of (message.attachments || []).entries()) {
@@ -4847,9 +4981,8 @@ async function refreshLogs() {
   try {
     const query = new URLSearchParams();
     const effectiveJobId =
-      (state.isLogModalOpen && state.currentJobId) ||
       state.logTargetJobId ||
-      state.currentJobId;
+      (state.isLogModalOpen ? null : state.currentJobId);
     if (effectiveJobId) {
       query.set("job_id", effectiveJobId);
     }
@@ -4945,9 +5078,7 @@ async function refreshCurrentJob() {
   try {
     const jobs = await apiFetch("/api/jobs");
     const signature = stableJsonSignature(jobs);
-    if (signature === state.lastJobsSignature) {
-      return;
-    }
+    const changed = signature !== state.lastJobsSignature;
     state.lastJobsSignature = signature;
     state.jobs = jobs;
     if (
@@ -4956,9 +5087,15 @@ async function refreshCurrentJob() {
     ) {
       state.currentJobId = resolveCurrentJobId();
     }
-    renderTaskMetrics();
-    renderTaskBoard();
-    renderEditWorkspace();
+    const messageChanged = syncEditMessagesFromJobs();
+    if (messageChanged) {
+      saveEditConversations();
+    }
+    if (changed || messageChanged) {
+      renderTaskMetrics();
+      renderTaskBoard();
+      renderEditWorkspace();
+    }
   } catch (_error) {
     // Ignore transient polling failures.
   }
@@ -4989,6 +5126,10 @@ async function refreshHistory() {
     }
     state.lastHistorySignature = signature;
     state.history = history;
+    const messageChanged = syncEditMessagesFromJobs();
+    if (messageChanged) {
+      saveEditConversations();
+    }
     renderHistory();
     renderEditWorkspace();
   } catch (_error) {

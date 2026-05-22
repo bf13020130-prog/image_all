@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS user_quotas (
   balance INTEGER NOT NULL DEFAULT 0,
   daily_limit INTEGER NOT NULL DEFAULT 0,
   monthly_limit INTEGER NOT NULL DEFAULT 0,
-  concurrent_limit INTEGER NOT NULL DEFAULT 1,
+  concurrent_limit INTEGER NOT NULL DEFAULT 20,
   storage_limit_mb INTEGER NOT NULL DEFAULT 10240,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -103,6 +103,14 @@ CREATE TABLE IF NOT EXISTS job_artifacts (
   size_bytes INTEGER NOT NULL DEFAULT 0,
   mime_type TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_image_counters (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  counter_key TEXT NOT NULL,
+  next_value INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, counter_key)
 );
 
 CREATE TABLE IF NOT EXISTS conversations (

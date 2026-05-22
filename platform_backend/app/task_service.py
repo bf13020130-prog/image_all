@@ -74,6 +74,46 @@ def add_job_event(
         )
 
 
+def allocate_user_image_sequence(
+    *,
+    user_id: str,
+    count: int,
+    counter_key: str = "generated_images",
+) -> int:
+    safe_count = max(1, int(count))
+    now = utc_now()
+    with transaction() as conn:
+        row = conn.execute(
+            """
+            SELECT next_value FROM user_image_counters
+            WHERE user_id = ? AND counter_key = ?
+            """,
+            (user_id, counter_key),
+        ).fetchone()
+        if row:
+            start = max(1, int(row["next_value"] or 1))
+            conn.execute(
+                """
+                UPDATE user_image_counters
+                SET next_value = ?, updated_at = ?
+                WHERE user_id = ? AND counter_key = ?
+                """,
+                (start + safe_count, now, user_id, counter_key),
+            )
+        else:
+            start = 1
+            conn.execute(
+                """
+                INSERT INTO user_image_counters (
+                  user_id, counter_key, next_value, updated_at
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (user_id, counter_key, start + safe_count, now),
+            )
+    return start
+
+
 def create_job(
     *,
     user_id: str,
@@ -89,7 +129,7 @@ def create_job(
     if storage_limit and used_storage >= storage_limit:
         raise HTTPException(status_code=403, detail="用户存储空间已用尽。")
     running_count = count_running_jobs(user_id)
-    concurrent_limit = max(1, int(quota.get("concurrent_limit") or 1))
+    concurrent_limit = max(1, int(quota.get("concurrent_limit") or 20))
     if running_count >= concurrent_limit:
         raise HTTPException(status_code=429, detail="当前并发任务数已达到限制。")
     job_id = new_id("job")
@@ -145,7 +185,7 @@ def get_user_quota(user_id: str) -> dict[str, Any]:
               user_id, balance, daily_limit, monthly_limit, concurrent_limit,
               storage_limit_mb, created_at, updated_at
             )
-            VALUES (?, 0, 0, 0, 1, 10240, ?, ?)
+            VALUES (?, 0, 0, 0, 20, 10240, ?, ?)
             """,
             (user_id, now, now),
         )
@@ -329,5 +369,11 @@ def finish_job(
             """,
             (status, progress, json_dumps(result), error, now, now, job_id),
         )
-    message = "任务完成。" if status in {"completed", "partial"} else f"任务失败：{error}"
-    add_job_event(job_id=job_id, user_id=user_id, message=message, level="error" if error else "info")
+    if status == "completed":
+        message = "任务完成。"
+    elif status == "partial":
+        message = f"任务部分完成：{error}" if error else "任务部分完成。"
+    else:
+        message = f"任务失败：{error}" if error else "任务失败。"
+    level = "error" if status == "failed" or error else "warning" if status == "partial" else "info"
+    add_job_event(job_id=job_id, user_id=user_id, message=message, level=level)

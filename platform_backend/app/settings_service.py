@@ -169,8 +169,8 @@ def get_user_concurrency_limit(user_id: str) -> int:
             (user_id,),
         ).fetchone()
     if not row:
-        return 1
-    return max(1, int(row["concurrent_limit"] or 1))
+        return 20
+    return max(1, int(row["concurrent_limit"] or 20))
 
 
 def _clamp_user_concurrency(user_id: str, payload: dict[str, Any]) -> dict[str, Any]:

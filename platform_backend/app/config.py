@@ -50,6 +50,7 @@ class PlatformConfig:
         _env("PLATFORM_HISTORY_CLEANUP_INTERVAL_HOURS", "24")
     )
     worker_poll_seconds: float = float(_env("PLATFORM_WORKER_POLL_SECONDS", "2"))
+    worker_concurrency: int = max(1, int(_env("PLATFORM_WORKER_CONCURRENCY", "20")))
     pipeline_enabled: bool = _env("PLATFORM_ENABLE_PIPELINE", "1") == "1"
 
     def ensure_dirs(self) -> None:

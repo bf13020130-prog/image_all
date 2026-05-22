@@ -75,7 +75,7 @@ def register(payload: RegisterRequest, request: Request, response: Response) -> 
                   user_id, balance, daily_limit, monthly_limit, concurrent_limit,
                   storage_limit_mb, created_at, updated_at
                 )
-                VALUES (?, 0, 0, 0, 1, 10240, ?, ?)
+                VALUES (?, 0, 0, 0, 20, 10240, ?, ?)
                 """,
                 (user_id, now, now),
             )

@@ -22,7 +22,7 @@ class UserCreateRequest(BaseModel):
     display_name: str = Field(default="", max_length=120)
     password: str | None = Field(default=None, min_length=8, max_length=200)
     role: str = Field(default="user")
-    concurrent_limit: int = Field(default=1, ge=1, le=50)
+    concurrent_limit: int = Field(default=20, ge=1, le=50)
     storage_limit_mb: int = Field(default=10240, ge=100, le=10_000_000)
 
 

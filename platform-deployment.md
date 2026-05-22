@@ -85,7 +85,10 @@ PLATFORM_COOKIE_SECURE=1
 PLATFORM_ALLOW_PRIVATE_URLS=0
 PLATFORM_HISTORY_RETENTION_DAYS=10
 PLATFORM_HISTORY_CLEANUP_INTERVAL_HOURS=24
+PLATFORM_WORKER_CONCURRENCY=20
 ```
+
+`PLATFORM_WORKER_CONCURRENCY` 是服务器真正同时执行任务的 Worker 数。管理端给用户设置的并发数是“单个用户最多可提交/挂起多少个任务”，两个限制会同时生效：用户额度没满才能提交，Worker 有空位才会立即执行，否则会短暂排队。
 
 如果你暂时不用域名和宝塔反向代理，而是直接访问公网 IP 的 `8000` 端口，把这两项改成：
 

@@ -150,7 +150,8 @@ def artifact_image_items(artifacts: list[dict[str, Any]]) -> list[dict[str, str]
     ]
     by_stem: dict[str, list[dict[str, Any]]] = {}
     for item in image_artifacts:
-        stem = Path(str(item.get("path") or item.get("url") or "")).stem
+        path_stem = Path(str(item.get("path") or item.get("url") or "")).stem
+        stem = path_stem.removesuffix(".thumb")
         by_stem.setdefault(stem, []).append(item)
 
     items: list[dict[str, str]] = []
