@@ -2398,6 +2398,11 @@ body::before {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: inherit;
+  color: var(--text-strong);
   text-decoration: none;
+}
+
+.platform-top-link:hover,
+.platform-top-link:focus-visible {
+  color: var(--text-strong);
 }
