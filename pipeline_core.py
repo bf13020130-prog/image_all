@@ -1713,6 +1713,46 @@ def format_http_error(label: str, url: str, status_code: int, body_text: str) ->
     return f"{label} failed with HTTP {status_code} from {url}."
 
 
+def summarize_http_error_body(body_text: str, *, max_chars: int = 500) -> str:
+    text = str(body_text or "").strip()
+    if not text:
+        return ""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        summary = re.sub(r"\s+", " ", text)
+    else:
+        summary = summarize_error_payload(payload)
+    if len(summary) > max_chars:
+        return summary[:max_chars].rstrip() + "..."
+    return summary
+
+
+def summarize_error_payload(payload: Any) -> str:
+    if isinstance(payload, dict):
+        candidates = []
+        for key in ("message", "detail", "error", "error_message", "code", "type"):
+            value = payload.get(key)
+            if value in (None, ""):
+                continue
+            if isinstance(value, (dict, list)):
+                candidates.append(f"{key}={json.dumps(value, ensure_ascii=False)}")
+            else:
+                candidates.append(f"{key}={value}")
+        if candidates:
+            return "; ".join(candidates)
+        return json.dumps(payload, ensure_ascii=False)
+    if isinstance(payload, list):
+        return json.dumps(payload[:3], ensure_ascii=False)
+    return str(payload)
+
+
+def retry_http_log_message(label: str, status_code: int, wait_seconds: int, body_text: str) -> str:
+    details = summarize_http_error_body(body_text)
+    suffix = f"；响应摘要：{details}" if details else ""
+    return f"{label}: HTTP {status_code}{suffix}，{wait_seconds}s 后重试。"
+
+
 METADATA_IP_BLOCKLIST = {
     ipaddress.ip_address("169.254.169.254"),
     ipaddress.ip_address("100.100.100.200"),
@@ -1849,7 +1889,12 @@ def request_bytes_with_retries(
                     ):
                         wait_seconds = retry_sleep_seconds(attempt)
                         logger.log(
-                            f"{label}: HTTP {response.status_code}，{wait_seconds}s 后重试。"
+                            retry_http_log_message(
+                                label,
+                                response.status_code,
+                                wait_seconds,
+                                response.text,
+                            )
                         )
                         time.sleep(wait_seconds)
                         continue
@@ -1895,7 +1940,9 @@ def request_bytes_with_retries(
                 or is_retryable_error_body(exc.code, response_text)
             ):
                 wait_seconds = retry_sleep_seconds(attempt)
-                logger.log(f"{label}: HTTP {exc.code}，{wait_seconds}s 后重试。")
+                logger.log(
+                    retry_http_log_message(label, exc.code, wait_seconds, response_text)
+                )
                 time.sleep(wait_seconds)
                 continue
             raise AppError(last_error_message) from exc
