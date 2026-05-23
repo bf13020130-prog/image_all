@@ -20,7 +20,7 @@ from ..settings_service import (
 )
 from ..storage_service import delete_job_storage, save_uploads
 from ..task_service import create_job, finish_job, get_job, get_user_quota, list_jobs, update_job_payload
-from ..task_service import count_running_jobs
+from ..task_service import count_active_request_slots, release_job_request_slots
 from ..config import CONFIG
 
 
@@ -31,7 +31,7 @@ def _shared_pool(user_id: str) -> dict[str, int | str]:
     settings = public_settings_for_user(user_id)["effective"]
     quota = get_user_quota(user_id)
     capacity = max(1, int(quota.get("concurrent_limit") or 20))
-    used = min(capacity, count_running_jobs(user_id))
+    used = min(capacity, count_active_request_slots(user_id))
     task_concurrency = max(1, int(settings.get("default_concurrency") or 1))
     worker_capacity = max(1, int(CONFIG.worker_concurrency))
     running = sum(
@@ -191,6 +191,7 @@ def _download_response(job: dict[str, Any], *, scope: str, selected_ids: set[str
 def _delete_job_for_user(item: dict[str, Any], user_id: str, *, run_id: str | None = None) -> dict[str, Any]:
     if item["status"] in {"queued", "running"}:
         raise HTTPException(status_code=409, detail="task_still_running")
+    release_job_request_slots(item["id"], user_id)
     deleted_files = delete_job_storage(user_id, item["id"])
     with transaction() as conn:
         conn.execute(

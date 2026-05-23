@@ -889,6 +889,16 @@ def shared_render_slot() -> Any:
         gate.release()
 
 
+@contextmanager
+def external_request_slot(label: str, logger: "AppLogger") -> Any:
+    factory = getattr(logger, "request_slot_factory", None)
+    if factory is None:
+        yield
+        return
+    with factory(label):
+        yield
+
+
 @dataclass
 class Settings:
     use_system_proxy: bool = False
@@ -1441,11 +1451,13 @@ class AppLogger:
         ui_callback: Any | None = None,
         run_log_path: Path | None = None,
         lock: threading.Lock | None = None,
+        request_slot_factory: Any | None = None,
     ) -> None:
         self.app_log_path = app_log_path
         self.ui_callback = ui_callback
         self.run_log_path = run_log_path
         self._lock = lock or threading.Lock()
+        self.request_slot_factory = request_slot_factory
 
     def with_run_log(self, run_log_path: Path) -> "AppLogger":
         return AppLogger(
@@ -1453,6 +1465,7 @@ class AppLogger:
             ui_callback=self.ui_callback,
             run_log_path=run_log_path,
             lock=self._lock,
+            request_slot_factory=self.request_slot_factory,
         )
 
     def log(self, message: str) -> None:
@@ -2005,19 +2018,20 @@ def request_json(
         logger.log(
             f"{label}: 请求体约 {len(body) / (1024 * 1024):.1f} MB，写入超时 {effective_connect_timeout}s"
         )
-    response = request_bytes_with_retries(
-        "POST",
-        url,
-        headers=headers,
-        body=body,
-        connect_timeout_seconds=effective_connect_timeout,
-        read_timeout_seconds=read_timeout_seconds,
-        retry_count=retry_count,
-        label=label,
-        logger=logger,
-        upload_gate=upload_gate,
-        use_system_proxy=use_system_proxy,
-    )
+    with external_request_slot(label, logger):
+        response = request_bytes_with_retries(
+            "POST",
+            url,
+            headers=headers,
+            body=body,
+            connect_timeout_seconds=effective_connect_timeout,
+            read_timeout_seconds=read_timeout_seconds,
+            retry_count=retry_count,
+            label=label,
+            logger=logger,
+            upload_gate=upload_gate,
+            use_system_proxy=use_system_proxy,
+        )
     try:
         response_json = json.loads(response.body.decode("utf-8"))
     except json.JSONDecodeError as exc:
@@ -2150,19 +2164,20 @@ def request_multipart_json(
         logger.log(
             f"{label}: multipart 上传 {len(file_parts)} 张图，约 {total_upload_mb:.1f} MB，写入超时 {effective_connect_timeout}s"
         )
-    response = request_bytes_with_retries(
-        "POST",
-        url,
-        headers=headers,
-        body=body,
-        connect_timeout_seconds=effective_connect_timeout,
-        read_timeout_seconds=read_timeout_seconds,
-        retry_count=retry_count,
-        label=label,
-        logger=logger,
-        upload_gate=upload_gate,
-        use_system_proxy=use_system_proxy,
-    )
+    with external_request_slot(label, logger):
+        response = request_bytes_with_retries(
+            "POST",
+            url,
+            headers=headers,
+            body=body,
+            connect_timeout_seconds=effective_connect_timeout,
+            read_timeout_seconds=read_timeout_seconds,
+            retry_count=retry_count,
+            label=label,
+            logger=logger,
+            upload_gate=upload_gate,
+            use_system_proxy=use_system_proxy,
+        )
     try:
         response_json = json.loads(response.body.decode("utf-8"))
     except json.JSONDecodeError as exc:

@@ -8,7 +8,7 @@ from typing import Any
 import pipeline_core as pipeline_app
 
 from .storage_service import job_storage_dir, register_artifact
-from .task_service import add_job_event, allocate_user_image_sequence
+from .task_service import add_job_event, allocate_user_image_sequence, request_slot
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
@@ -377,6 +377,11 @@ def run_pipeline_job(job: dict[str, Any]) -> dict[str, Any]:
     logger = pipeline_app.AppLogger(
         context.app_log_path,
         ui_callback=_create_job_event_logger(job),
+        request_slot_factory=lambda label: request_slot(
+            user_id=job["user_id"],
+            job_id=job["id"],
+            label=str(label or ""),
+        ),
     )
     progress_callback = _progress_callback(job)
     uploads = _uploads(payload)

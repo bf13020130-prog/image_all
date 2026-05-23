@@ -84,6 +84,18 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at);
 
+CREATE TABLE IF NOT EXISTS active_request_slots (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  job_id TEXT REFERENCES jobs(id) ON DELETE CASCADE,
+  label TEXT NOT NULL DEFAULT '',
+  acquired_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_active_request_slots_user ON active_request_slots(user_id);
+CREATE INDEX IF NOT EXISTS idx_active_request_slots_job ON active_request_slots(job_id);
+
 CREATE TABLE IF NOT EXISTS job_events (
   id TEXT PRIMARY KEY,
   job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,

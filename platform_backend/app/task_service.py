@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Iterator
 
 from fastapi import HTTPException
 
@@ -128,10 +130,6 @@ def create_job(
     storage_limit = int(quota.get("storage_limit_mb") or 0) * 1024 * 1024
     if storage_limit and used_storage >= storage_limit:
         raise HTTPException(status_code=403, detail="用户存储空间已用尽。")
-    running_count = count_running_jobs(user_id)
-    concurrent_limit = max(1, int(quota.get("concurrent_limit") or 20))
-    if running_count >= concurrent_limit:
-        raise HTTPException(status_code=429, detail="当前并发任务数已达到限制。")
     job_id = new_id("job")
     now = utc_now()
     settings = effective_settings_for_user(user_id)
@@ -202,6 +200,102 @@ def count_running_jobs(user_id: str) -> int:
             (user_id,),
         ).fetchone()
     return int(row["count"] if row else 0)
+
+
+def count_active_request_slots(user_id: str) -> int:
+    cleanup_orphan_request_slots(user_id=user_id)
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM active_request_slots
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    return int(row["count"] if row else 0)
+
+
+def _cleanup_orphan_request_slots(conn: Any, *, user_id: str | None = None) -> int:
+    params: list[Any] = []
+    user_filter = ""
+    if user_id:
+        user_filter = "AND user_id = ?"
+        params.append(user_id)
+    cursor = conn.execute(
+        f"""
+        DELETE FROM active_request_slots
+        WHERE NOT EXISTS (
+            SELECT 1 FROM jobs
+            WHERE jobs.id = active_request_slots.job_id
+              AND jobs.user_id = active_request_slots.user_id
+              AND jobs.status IN ('queued', 'running')
+        )
+        {user_filter}
+        """,
+        params,
+    )
+    return int(cursor.rowcount or 0)
+
+
+def cleanup_orphan_request_slots(*, user_id: str | None = None) -> int:
+    with transaction() as conn:
+        return _cleanup_orphan_request_slots(conn, user_id=user_id)
+
+
+def release_job_request_slots(job_id: str, user_id: str) -> int:
+    with transaction() as conn:
+        cursor = conn.execute(
+            "DELETE FROM active_request_slots WHERE job_id = ? AND user_id = ?",
+            (job_id, user_id),
+        )
+    return int(cursor.rowcount or 0)
+
+
+@contextmanager
+def request_slot(
+    *,
+    user_id: str,
+    job_id: str,
+    label: str = "",
+    poll_seconds: float = 0.5,
+) -> Iterator[None]:
+    slot_id = new_id("slot")
+    safe_poll_seconds = max(0.1, float(poll_seconds or 0.5))
+    while True:
+        quota = get_user_quota(user_id)
+        capacity = max(1, int(quota.get("concurrent_limit") or 20))
+        now = utc_now()
+        acquired = False
+        with transaction() as conn:
+            _cleanup_orphan_request_slots(conn, user_id=user_id)
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count FROM active_request_slots
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+            used = int(row["count"] if row else 0)
+            if used < capacity:
+                conn.execute(
+                    """
+                    INSERT INTO active_request_slots (
+                      id, user_id, job_id, label, acquired_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (slot_id, user_id, job_id, str(label or ""), now, now),
+                )
+                acquired = True
+        if acquired:
+            break
+        time.sleep(safe_poll_seconds)
+
+    try:
+        yield
+    finally:
+        with transaction() as conn:
+            conn.execute("DELETE FROM active_request_slots WHERE id = ?", (slot_id,))
 
 
 def _public_job(row: dict[str, Any]) -> dict[str, Any]:
@@ -368,6 +462,10 @@ def finish_job(
             WHERE id = ?
             """,
             (status, progress, json_dumps(result), error, now, now, job_id),
+        )
+        conn.execute(
+            "DELETE FROM active_request_slots WHERE job_id = ? AND user_id = ?",
+            (job_id, user_id),
         )
     if status == "completed":
         message = "任务完成。"
