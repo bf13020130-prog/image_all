@@ -171,7 +171,8 @@ def _summary_image_sources(record: dict[str, Any]) -> list[Path]:
         for image_path in latest_images:
             _append_unique_path(paths, image_path, seen)
 
-    summary = pipeline_app.read_json_file(record.get("summary_file"), {})
+    summary_file = record.get("summary_file")
+    summary = pipeline_app.read_json_file(Path(str(summary_file)), {}) if summary_file else {}
     renders = summary.get("renders", []) if isinstance(summary, dict) else []
     if isinstance(renders, list):
         for render in renders:

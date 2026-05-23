@@ -852,10 +852,26 @@ body::before {
   width: 22px;
   height: 22px;
   padding: 0;
+  border: 1px solid rgba(249, 241, 226, 0.52);
   border-radius: 999px;
-  background: rgba(18, 14, 11, 0.78);
+  background: rgba(18, 14, 11, 0.92);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.38);
   color: var(--text-strong);
+  font-size: 1rem;
   font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.edit-preview-remove:hover,
+.edit-preview-remove:focus-visible {
+  border-color: rgba(249, 241, 226, 0.9);
+  background: rgba(90, 55, 44, 0.96);
+  transform: scale(1.06);
 }
 
 .edit-workspace {

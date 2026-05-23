@@ -7,6 +7,8 @@ from typing import Any
 
 from fastapi import UploadFile
 
+import pipeline_core as pipeline_app
+
 from .config import CONFIG
 from .database import connect, new_id, transaction
 from .security import utc_now
@@ -64,6 +66,29 @@ def safe_suffix(filename: str) -> str:
     return ".bin"
 
 
+def image_suffix_from_bytes(content: bytes) -> str:
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if content.startswith(b"\xff\xd8"):
+        return ".jpg"
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return ".webp"
+    if content.startswith(b"GIF87a") or content.startswith(b"GIF89a"):
+        return ".gif"
+    if content.startswith(b"BM"):
+        return ".bmp"
+    return ".bin"
+
+
+def upload_image_mime_type(content: bytes, filename: str, content_type: str | None) -> str:
+    detected = pipeline_app.image_mime_type_from_bytes(content[:16])
+    if detected:
+        return detected
+    if content_type and content_type.startswith("image/"):
+        return content_type
+    return mimetypes.guess_type(filename or "")[0] or "application/octet-stream"
+
+
 async def save_uploads(
     *,
     user_id: str,
@@ -83,8 +108,15 @@ async def save_uploads(
         if len(content) > CONFIG.max_upload_mb * 1024 * 1024:
             raise ValueError(f"{upload.filename or field_name} 超过上传大小限制。")
         suffix = safe_suffix(upload.filename or "")
+        if suffix == ".bin":
+            suffix = image_suffix_from_bytes(content)
         target = target_dir / f"{field_name}-{index:02d}{suffix}"
         target.write_bytes(content)
+        mime_type = upload_image_mime_type(
+            content,
+            upload.filename or target.name,
+            upload.content_type,
+        )
         saved.append(
             {
                 "field": field_name,
@@ -92,9 +124,7 @@ async def save_uploads(
                 "path": str(target),
                 "url": f"/api/v1/files/{user_id}/jobs/{job_id}/inputs/{target.name}",
                 "size_bytes": len(content),
-                "mime_type": upload.content_type
-                or mimetypes.guess_type(target.name)[0]
-                or "application/octet-stream",
+                "mime_type": mime_type,
             }
         )
     return saved

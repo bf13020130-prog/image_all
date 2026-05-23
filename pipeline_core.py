@@ -1657,8 +1657,30 @@ def redact_headers(headers: dict[str, str]) -> dict[str, str]:
     return redacted
 
 
+def image_mime_type_from_bytes(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8"):
+        return "image/jpeg"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return "image/gif"
+    if data.startswith(b"BM"):
+        return "image/bmp"
+    return None
+
+
 def guess_mime_type(path: Path) -> str:
-    return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    guessed = mimetypes.guess_type(path.name)[0]
+    if guessed and guessed != "application/octet-stream":
+        return guessed
+    try:
+        with path.open("rb") as handle:
+            detected = image_mime_type_from_bytes(handle.read(16))
+    except OSError:
+        detected = None
+    return detected or guessed or "application/octet-stream"
 
 
 def encode_image_as_data_url(path: Path) -> str:

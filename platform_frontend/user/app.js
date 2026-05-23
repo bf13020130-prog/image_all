@@ -836,6 +836,9 @@ async function bootstrap() {
     state.lastJobsSignature = stableJsonSignature(state.jobs);
     state.currentJobId = resolveCurrentJobId();
     loadEditConversations(payload.edit_conversations || []);
+    if (hydrateEditMessagesInputImageUrls()) {
+      saveEditConversations();
+    }
     if (hydrateEditConversationTextRepliesFromHistory(state.history)) {
       saveEditConversations();
     }
@@ -1126,16 +1129,7 @@ function normalizePersistedEditConversations(source) {
                   : 0,
               attachments: Array.isArray(message?.attachments)
                 ? message.attachments
-                    .map((item, index) => ({
-                      name:
-                        typeof item?.name === "string" && item.name
-                          ? item.name
-                          : `输入图 ${index + 1}`,
-                      src:
-                        typeof item?.src === "string" && item.src && !item.src.startsWith("blob:")
-                          ? item.src
-                          : "",
-                    }))
+                    .map((item, index) => normalizeAttachmentItem(item, index))
                     .filter((item) => item.name)
                 : [],
             }))
@@ -1242,13 +1236,194 @@ function serializeEditConversations() {
             typeof item?.src === "string" && item.src && !item.src.startsWith("blob:")
               ? item.src
               : "",
+          thumbnailSrc:
+            typeof item?.thumbnailSrc === "string" &&
+            item.thumbnailSrc &&
+            !item.thumbnailSrc.startsWith("blob:")
+              ? item.thumbnailSrc
+              : typeof item?.thumbnailUrl === "string" &&
+                  item.thumbnailUrl &&
+                  !item.thumbnailUrl.startsWith("blob:")
+                ? item.thumbnailUrl
+                : typeof item?.thumbnail_src === "string" &&
+                    item.thumbnail_src &&
+                    !item.thumbnail_src.startsWith("blob:")
+                  ? item.thumbnail_src
+                  : "",
         })),
       })),
     }));
 }
 
 function isPersistableImageSrc(value) {
-  return typeof value === "string" && value && !value.startsWith("blob:");
+  return (
+    typeof value === "string" &&
+    value &&
+    !value.startsWith("blob:")
+  );
+}
+
+function normalizeImageSrcValue(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isKnownThumbnailImageUrl(value) {
+  const text = normalizeImageSrcValue(value);
+  if (!text) {
+    return false;
+  }
+  return (
+    text.includes("/api/v1/pipeline-thumbnails/") ||
+    /\/_thumbs\/[^?#]+\.webp(?:[?#].*)?$/i.test(text) ||
+    /\.thumb\.webp(?:[?#].*)?$/i.test(text)
+  );
+}
+
+function isSafeReusableImageUrl(value) {
+  const text = normalizeImageSrcValue(value);
+  return Boolean(text && !text.startsWith("blob:") && !isKnownThumbnailImageUrl(text));
+}
+
+function originalUrlFromKnownThumbnailUrl(value) {
+  const text = normalizeImageSrcValue(value);
+  if (!text.includes("/api/v1/pipeline-thumbnails/")) {
+    return "";
+  }
+  const original = text.replace("/api/v1/pipeline-thumbnails/", "/api/v1/pipeline-files/");
+  if (/\/_thumbs\/[^?#]+\.webp(?:[?#].*)?$/i.test(original)) {
+    return "";
+  }
+  return original;
+}
+
+function resolveReusableImageSrc(value, fallbackValue = "") {
+  const fallback = normalizeImageSrcValue(fallbackValue);
+  const text = normalizeImageSrcValue(value);
+  if (!text) {
+    return fallback;
+  }
+  if (text.startsWith("blob:")) {
+    return fallback || text;
+  }
+  if (isKnownThumbnailImageUrl(text)) {
+    const originalUrl = originalUrlFromKnownThumbnailUrl(text);
+    if (fallback || originalUrl) {
+      return fallback || originalUrl;
+    }
+    return "";
+  }
+  return text;
+}
+
+function normalizeAttachmentItem(item, index = 0, fallbackSrc = "") {
+  const rawSrc = normalizeImageSrcValue(item?.src);
+  const rawThumbnailSrc =
+    normalizeImageSrcValue(item?.thumbnailSrc) ||
+    normalizeImageSrcValue(item?.thumbnailUrl) ||
+    normalizeImageSrcValue(item?.thumbnail_src);
+  const src = resolveReusableImageSrc(rawSrc, fallbackSrc);
+  const thumbnailSrc =
+    rawThumbnailSrc ||
+    (rawSrc.startsWith("blob:") && fallbackSrc ? rawSrc : "") ||
+    (rawSrc && isKnownThumbnailImageUrl(rawSrc) ? rawSrc : "");
+  return {
+    name:
+      typeof item?.name === "string" && item.name
+        ? item.name
+        : `输入图 ${index + 1}`,
+    src,
+    thumbnailSrc,
+  };
+}
+
+function attachmentDisplaySrc(attachment) {
+  return (
+    normalizeImageSrcValue(attachment?.thumbnailSrc) ||
+    normalizeImageSrcValue(attachment?.src)
+  );
+}
+
+function sourceExtensionFromUrl(value) {
+  const text = normalizeImageSrcValue(value);
+  const match = text.match(/\.([a-zA-Z0-9]{2,5})(?:[?#].*)?$/);
+  const rawExtension = match ? match[1].toLowerCase().replace(/[^a-z0-9]+/g, "") : "";
+  return rawExtension === "jpeg" ? "jpg" : rawExtension;
+}
+
+function getInputImageUrlsFromRecord(record) {
+  return Array.isArray(record?.input_image_urls)
+    ? record.input_image_urls.filter((item) => typeof item === "string" && item)
+    : [];
+}
+
+function getMessageInputImageUrls(message) {
+  const job = message?.jobId
+    ? state.jobs.find((item) => item.job_id === message.jobId)
+    : null;
+  const jobUrls = getInputImageUrlsFromRecord(job?.record);
+  if (jobUrls.length) {
+    return jobUrls;
+  }
+  const historyRecord = state.history.find((record) => {
+    if (message?.jobId && record.job_id === message.jobId) {
+      return true;
+    }
+    return Boolean(message?.runId && record.run_id === message.runId);
+  });
+  return getInputImageUrlsFromRecord(historyRecord);
+}
+
+function applyMessageInputImageUrls(message, inputImageUrls) {
+  const urls = Array.isArray(inputImageUrls) ? inputImageUrls : [];
+  if (!message || !urls.length) {
+    return false;
+  }
+  if (!Array.isArray(message.attachments)) {
+    message.attachments = [];
+  }
+  let changed = false;
+  const count = Math.max(
+    message.attachments.length,
+    urls.length,
+    Number.parseInt(String(message.inputCount || 0), 10) || 0
+  );
+  for (let index = 0; index < count; index += 1) {
+    const current = message.attachments[index] || { name: `输入图 ${index + 1}`, src: "" };
+    const normalized = normalizeAttachmentItem(current, index, urls[index] || "");
+    if (!message.attachments[index]) {
+      message.attachments[index] = normalized;
+      changed = true;
+      continue;
+    }
+    if (current.src !== normalized.src) {
+      current.src = normalized.src;
+      changed = true;
+    }
+    if (!current.thumbnailSrc && normalized.thumbnailSrc) {
+      current.thumbnailSrc = normalized.thumbnailSrc;
+      changed = true;
+    }
+    if (!current.name && normalized.name) {
+      current.name = normalized.name;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function hydrateEditMessagesInputImageUrls() {
+  if (!Array.isArray(state.editConversations) || !state.editConversations.length) {
+    return false;
+  }
+  let changed = false;
+  state.editConversations.forEach((conversation) => {
+    (conversation.messages || []).forEach((message) => {
+      if (applyMessageInputImageUrls(message, getMessageInputImageUrls(message))) {
+        changed = true;
+      }
+    });
+  });
+  return changed;
 }
 
 function normalizeAgentImageRefs(imageRefs) {
@@ -1280,12 +1455,15 @@ function buildAgentMessageImageRefs(message, messageIndex) {
   };
 
   (message.attachments || []).slice(0, AGENT_CONTEXT_MAX_ATTACHMENTS).forEach((attachment, index) => {
-    const url = isPersistableImageSrc(attachment?.src) ? attachment.src : "";
+    const url = isSafeReusableImageUrl(attachment?.src) ? attachment.src : "";
+    const thumbnailUrl = isPersistableImageSrc(attachment?.thumbnailSrc)
+      ? attachment.thumbnailSrc
+      : url;
     refs.push({
       id: `${prefix}_input_${String(index + 1).padStart(2, "0")}`,
       type: "input",
       url,
-      thumbnailUrl: url,
+      thumbnailUrl,
       name: attachment?.name || `input ${index + 1}`,
       caption: `message ${messageIndex} input image ${index + 1}`,
       ...messageMeta,
@@ -1354,7 +1532,10 @@ function buildAgentConversationContext(conversation) {
               .slice(0, AGENT_CONTEXT_MAX_ATTACHMENTS)
               .map((item) => ({
                 name: item?.name || "",
-                src: isPersistableImageSrc(item?.src) ? item.src : "",
+                src: isSafeReusableImageUrl(item?.src) ? item.src : "",
+                thumbnailSrc: isPersistableImageSrc(item?.thumbnailSrc)
+                  ? item.thumbnailSrc
+                  : "",
               }))
               .filter((item) => item.name || item.src)
           : [],
@@ -1418,9 +1599,7 @@ function reconstructEditConversationsFromHistory(records = []) {
         : Array.isArray(summary?.input_images)
           ? summary.input_images.length
           : 0;
-    const inputImageUrls = Array.isArray(record?.input_image_urls)
-      ? record.input_image_urls.filter((item) => typeof item === "string" && item)
-      : [];
+    const inputImageUrls = getInputImageUrlsFromRecord(record);
     const conversationTitle =
       typeof record?.conversation_title === "string" && record.conversation_title.trim()
         ? record.conversation_title.trim()
@@ -1941,16 +2120,9 @@ function renderEditConversationStream() {
         message.agentSummary = agentSummary;
         shouldPersist = true;
       }
-      const jobInputUrls = Array.isArray(job.record?.input_image_urls)
-        ? job.record.input_image_urls
-        : [];
-      if (jobInputUrls.length && Array.isArray(message.attachments)) {
-        message.attachments.forEach((attachment, index) => {
-          if (!isPersistableImageSrc(attachment.src) && jobInputUrls[index]) {
-            attachment.src = jobInputUrls[index];
-            shouldPersist = true;
-          }
-        });
+      const jobInputUrls = getInputImageUrlsFromRecord(job.record);
+      if (applyMessageInputImageUrls(message, jobInputUrls)) {
+        shouldPersist = true;
       }
       if (job.task_key === "image-agent" && message.mode !== "agent") {
         message.mode = "agent";
@@ -2106,9 +2278,10 @@ function buildEditMessage(message, job) {
 
   const attachmentsNode = wrapper.querySelector(".edit-message__attachments");
   (message.attachments || []).forEach((attachment, index) => {
-    if (attachment.src) {
+    const displaySrc = attachmentDisplaySrc(attachment);
+    if (displaySrc) {
       const image = document.createElement("img");
-      image.src = attachment.src;
+      image.src = toApiUrl(displaySrc);
       image.alt = attachment.name || `输入图 ${index + 1}`;
       makeImageDraggable(image, attachment.src);
       attachmentsNode.appendChild(image);
@@ -2600,6 +2773,8 @@ function imageItemsFromRecord(record, captionPrefix = "") {
 function modalItemsFromImageItems(items) {
   return items.map((item) => ({
     src: toApiUrl(item.url),
+    originalSrc: toApiUrl(item.url),
+    thumbnailSrc: toApiUrl(item.thumbnailUrl),
     caption: item.caption || "",
   }));
 }
@@ -3507,6 +3682,7 @@ async function submitImageEditRequest({
       attachments: attachments.map((attachment) => ({
         name: attachment.name,
         src: URL.createObjectURL(attachment.file),
+        thumbnailSrc: "",
       })),
     };
     conversation.messages.push(message);
@@ -3990,6 +4166,8 @@ function renderEditPreview() {
       openImageModal(
         state.editInputAttachments.map((item, itemIndex) => ({
           src: item.url,
+          originalSrc: item.url,
+          thumbnailSrc: item.thumbnailUrl || item.url,
           caption: item.name || `输入图片 ${itemIndex + 1}`,
         })),
         {
@@ -3999,7 +4177,7 @@ function renderEditPreview() {
     });
 
     const image = document.createElement("img");
-    image.src = attachment.url;
+    image.src = attachment.thumbnailUrl || attachment.url;
     image.alt = `${attachment.name} 预览`;
     imageButton.appendChild(image);
 
@@ -4022,10 +4200,12 @@ function addEditFiles(files) {
     if (state.editInputAttachments.length >= 16) {
       return;
     }
+    const previewUrl = URL.createObjectURL(file);
     state.editInputAttachments.push({
       file,
       name: file.name || `image-${state.editInputAttachments.length + 1}.png`,
-      url: URL.createObjectURL(file),
+      url: previewUrl,
+      thumbnailUrl: previewUrl,
     });
   });
   renderEditPreview();
@@ -4165,6 +4345,9 @@ async function editEditMessage(messageId) {
     name: attachment.name,
     url: URL.createObjectURL(attachment.file),
   }));
+  state.editInputAttachments.forEach((attachment) => {
+    attachment.thumbnailUrl = attachment.url;
+  });
   renderEditPreview();
   setRoute("image-edit");
   refs.editPromptInput.focus();
@@ -4176,12 +4359,17 @@ async function editEditMessage(messageId) {
 
 async function filesFromEditMessage(message) {
   const files = [];
+  const inputImageUrls = getMessageInputImageUrls(message);
+  if (applyMessageInputImageUrls(message, inputImageUrls)) {
+    saveEditConversations();
+  }
   for (const [index, attachment] of (message.attachments || []).entries()) {
-    if (!attachment.src) {
+    const sourceUrl = resolveReusableImageSrc(attachment.src, inputImageUrls[index] || "");
+    if (!sourceUrl || isKnownThumbnailImageUrl(sourceUrl)) {
       continue;
     }
     try {
-      const response = await fetch(toApiUrl(attachment.src));
+      const response = await fetch(toApiUrl(sourceUrl));
       if (!response.ok) {
         continue;
       }
@@ -4189,7 +4377,10 @@ async function filesFromEditMessage(message) {
       if (!blob.type.startsWith("image/")) {
         continue;
       }
-      const extension = blob.type.split("/")[1] || "png";
+      const extension =
+        blob.type.split("/")[1] ||
+        sourceExtensionFromUrl(sourceUrl) ||
+        "png";
       const name = attachment.name || `rerun-${index + 1}.${extension}`;
       files.push({
         file: new File([blob], name, { type: blob.type }),
@@ -4237,6 +4428,12 @@ async function handleEditDrop(event) {
   event.preventDefault();
   refs.editDropZone.classList.remove("is-dragging");
 
+  const internalImageUrl = event.dataTransfer?.getData("application/x-imag-replicate-image");
+  if (internalImageUrl) {
+    await addEditImageUrl(internalImageUrl.trim());
+    return;
+  }
+
   const droppedFiles = Array.from(event.dataTransfer?.files || []).filter((file) =>
     file.type?.startsWith("image/")
   );
@@ -4263,7 +4460,10 @@ async function addEditImageUrl(url) {
     if (!blob.type.startsWith("image/")) {
       throw new Error("拖入的链接不是图片。");
     }
-    const extension = blob.type.split("/")[1] || "png";
+    const extension =
+      blob.type.split("/")[1] ||
+      sourceExtensionFromUrl(url) ||
+      "png";
     const file = new File([blob], `dragged-${Date.now()}.${extension}`, {
       type: blob.type,
     });
@@ -4352,8 +4552,13 @@ function insertEditPromptText(text) {
 
 function makeImageDraggable(image, sourceUrl) {
   image.draggable = true;
+  image.dataset.dragSourceUrl = sourceUrl || "";
+  if (image.dataset.dragBound === "true") {
+    return;
+  }
+  image.dataset.dragBound = "true";
   image.addEventListener("dragstart", (event) => {
-    const resolvedUrl = toApiUrl(sourceUrl);
+    const resolvedUrl = toApiUrl(image.dataset.dragSourceUrl || sourceUrl);
     event.dataTransfer?.setData("text/uri-list", resolvedUrl);
     event.dataTransfer?.setData("text/plain", resolvedUrl);
     event.dataTransfer?.setData("application/x-imag-replicate-image", resolvedUrl);
@@ -4367,6 +4572,8 @@ function normalizeImageModalItems(itemsOrSrc, caption = "") {
         if (typeof item === "string") {
           return {
             src: item,
+            originalSrc: item,
+            thumbnailSrc: "",
             caption,
           };
         }
@@ -4375,6 +4582,8 @@ function normalizeImageModalItems(itemsOrSrc, caption = "") {
         }
         return {
           src: item.src,
+          originalSrc: item.originalSrc || item.src,
+          thumbnailSrc: item.thumbnailSrc || "",
           caption: item.caption || caption,
         };
       })
@@ -4388,6 +4597,8 @@ function normalizeImageModalItems(itemsOrSrc, caption = "") {
   return [
     {
       src: itemsOrSrc,
+      originalSrc: itemsOrSrc,
+      thumbnailSrc: "",
       caption,
     },
   ];
@@ -4444,7 +4655,7 @@ function sanitizeFilenameSegment(value) {
 
 function buildImageModalFilename(item) {
   const preferredName = sanitizeFilenameSegment(item?.caption || "design-output");
-  const source = String(item?.src || "");
+  const source = String(item?.originalSrc || item?.src || "");
   const extensionMatch = source.match(/\.([a-zA-Z0-9]{2,5})(?:[?#].*)?$/);
   const dataMatch = source.match(/^data:image\/([a-zA-Z0-9.+-]+)[;,]/i);
   const rawExtension = extensionMatch?.[1] || dataMatch?.[1] || "png";
@@ -4455,10 +4666,11 @@ function buildImageModalFilename(item) {
 }
 
 async function fetchImageModalBlob(item) {
-  if (!item?.src) {
+  const source = item?.originalSrc || item?.src;
+  if (!source) {
     throw new Error("当前图片不可用。");
   }
-  const response = await fetch(item.src);
+  const response = await fetch(toApiUrl(source));
   if (!response.ok) {
     throw new Error("读取图片失败。");
   }
@@ -4487,7 +4699,9 @@ async function downloadActiveModalImage() {
 
 async function copyActiveModalImage() {
   if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
-    window.alert("当前环境不支持直接复制图片。");
+    window.alert(
+      "当前浏览器环境不支持直接复制图片。Chrome 只在 HTTPS 或 localhost 等安全上下文开放图片剪贴板；当前可先用“另存为”。"
+    );
     return;
   }
 
@@ -4507,6 +4721,12 @@ async function copyActiveModalImage() {
       }),
     ]);
   } catch (error) {
+    if (!window.isSecureContext || error?.name === "NotAllowedError") {
+      window.alert(
+        "当前浏览器限制了图片复制。请用 HTTPS 或 localhost 打开页面后再试；当前可先用“另存为”。"
+      );
+      return;
+    }
     window.alert(error.message || "复制图片失败。");
   }
 }
@@ -4564,6 +4784,7 @@ function renderImageModal() {
   refs.imageModalContent.src = activeItem.src;
   refs.imageModalContent.alt = activeItem.caption || "图片预览";
   refs.imageModalCaption.textContent = activeItem.caption || "";
+  makeImageDraggable(refs.imageModalContent, activeItem.originalSrc || activeItem.src);
 
   const total = state.imageModalItems.length;
   refs.imageModalCounter.textContent = total > 1 ? `${state.imageModalIndex + 1} / ${total}` : "";
@@ -5087,7 +5308,9 @@ async function refreshCurrentJob() {
     ) {
       state.currentJobId = resolveCurrentJobId();
     }
-    const messageChanged = syncEditMessagesFromJobs();
+    const syncedMessages = syncEditMessagesFromJobs();
+    const hydratedInputs = hydrateEditMessagesInputImageUrls();
+    const messageChanged = syncedMessages || hydratedInputs;
     if (messageChanged) {
       saveEditConversations();
     }
@@ -5126,7 +5349,9 @@ async function refreshHistory() {
     }
     state.lastHistorySignature = signature;
     state.history = history;
-    const messageChanged = syncEditMessagesFromJobs();
+    const syncedMessages = syncEditMessagesFromJobs();
+    const hydratedInputs = hydrateEditMessagesInputImageUrls();
+    const messageChanged = syncedMessages || hydratedInputs;
     if (messageChanged) {
       saveEditConversations();
     }
