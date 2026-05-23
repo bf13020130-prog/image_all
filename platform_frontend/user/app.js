@@ -924,13 +924,43 @@ function getSharedPoolDisplay() {
   return `${available} / ${capacity}`;
 }
 
+function getSharedPoolAvailability() {
+  const capacity =
+    Number(state.sharedPool?.capacity) ||
+    Number(state.sharedPool?.size) ||
+    Number(state.settings?.default_concurrency) ||
+    0;
+  const available =
+    state.sharedPool && Number.isFinite(Number(state.sharedPool.available))
+      ? Number(state.sharedPool.available)
+      : capacity;
+  return {
+    available: Math.max(0, Math.trunc(available || 0)),
+    capacity: Math.max(0, Math.trunc(capacity || 0)),
+  };
+}
+
 function renderTopStatus() {
-  const poolText = getSharedPoolDisplay();
-  const workerCapacity = Number(state.sharedPool?.worker_capacity) || 0;
-  const workerAvailable = Number(state.sharedPool?.worker_available) || 0;
-  const workerText = workerCapacity ? `，执行 ${workerAvailable} / ${workerCapacity}` : "";
-  refs.sharedPoolBadge.textContent =
-    poolText === "-" ? "任务额度 -" : `任务额度 ${poolText} 可提交${workerText}`;
+  const { available, capacity } = getSharedPoolAvailability();
+  refs.sharedPoolBadge.classList.remove(
+    "status-pill--quota-ok",
+    "status-pill--quota-low",
+    "status-pill--quota-danger"
+  );
+  if (!capacity) {
+    refs.sharedPoolBadge.textContent = "任务额度 -";
+    refs.sharedPoolBadge.title = "当前任务额度不可用";
+    return;
+  }
+  const stateClass =
+    available < 3
+      ? "status-pill--quota-danger"
+      : available < 10
+        ? "status-pill--quota-low"
+        : "status-pill--quota-ok";
+  refs.sharedPoolBadge.classList.add(stateClass);
+  refs.sharedPoolBadge.textContent = `任务额度 ${available}`;
+  refs.sharedPoolBadge.title = `当前还可提交 ${available} 个任务，总额度 ${capacity}。`;
 }
 
 function renderTaskMetrics() {

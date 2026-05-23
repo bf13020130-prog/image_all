@@ -206,6 +206,40 @@ body::before {
   color: var(--text-strong);
   font-size: 0.86rem;
   font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-pill--quota-ok,
+.status-pill--quota-low,
+.status-pill--quota-danger {
+  padding-right: 14px;
+}
+
+.status-pill--quota-ok::before,
+.status-pill--quota-low::before,
+.status-pill--quota-danger::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent);
+}
+
+.status-pill--quota-ok {
+  background: rgba(20, 72, 48, 0.94);
+  color: #9df2bc;
+}
+
+.status-pill--quota-low {
+  background: rgba(92, 66, 20, 0.94);
+  color: #ffd36a;
+}
+
+.status-pill--quota-danger {
+  background: rgba(92, 30, 30, 0.94);
+  color: #ff8f8f;
 }
 
 .status-pill--soft {
