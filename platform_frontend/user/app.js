@@ -84,6 +84,7 @@ const state = {
   editConversationScrollRequest: null,
   editConversationPersistTimer: null,
   editConversationPersistPayload: null,
+  deletedEditConversationIds: new Set(),
   replicateReferenceFiles: {
     style: [],
     product: [],
@@ -101,6 +102,7 @@ const state = {
 };
 
 const EDIT_CONVERSATIONS_STORAGE_KEY = "imagReplicate2.imageEditConversations";
+const DELETED_EDIT_CONVERSATIONS_STORAGE_KEY = "imagReplicate2.deletedImageEditConversationIds";
 const EDIT_STREAM_BOTTOM_THRESHOLD = 40;
 const AGENT_CONTEXT_MAX_MESSAGES = 80;
 const AGENT_CONTEXT_MAX_RESULT_URLS = 8;
@@ -821,6 +823,7 @@ function setEditGenerationMode(mode) {
 async function bootstrap() {
   try {
     reportStartupStep("bootstrap-start");
+    loadDeletedEditConversationIds();
     const payload = await apiFetch("/api/bootstrap");
     reportStartupStep("bootstrap-payload-received", {
       historyCount: Array.isArray(payload.history) ? payload.history.length : 0,
@@ -829,7 +832,7 @@ async function bootstrap() {
     });
     state.settings = payload.settings || {};
     state.sharedPool = payload.shared_pool || null;
-    state.history = payload.history || [];
+    state.history = filterDeletedEditConversationHistory(payload.history || []);
     state.jobs = payload.jobs || [];
     state.lastSharedPoolSignature = stableJsonSignature(state.sharedPool);
     state.lastHistorySignature = stableJsonSignature(state.history);
@@ -1081,6 +1084,66 @@ function renderTaskBoardFor({ board, taskKey, statuses = null, emptyText }) {
   });
 }
 
+function loadDeletedEditConversationIds() {
+  try {
+    const raw = window.localStorage.getItem(DELETED_EDIT_CONVERSATIONS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    state.deletedEditConversationIds = new Set(
+      Array.isArray(parsed)
+        ? parsed.filter((item) => typeof item === "string" && item)
+        : []
+    );
+  } catch (_error) {
+    state.deletedEditConversationIds = new Set();
+  }
+}
+
+function saveDeletedEditConversationIds() {
+  const ids = Array.from(state.deletedEditConversationIds || []);
+  if (ids.length) {
+    window.localStorage.setItem(
+      DELETED_EDIT_CONVERSATIONS_STORAGE_KEY,
+      JSON.stringify(ids.slice(-120))
+    );
+  } else {
+    window.localStorage.removeItem(DELETED_EDIT_CONVERSATIONS_STORAGE_KEY);
+  }
+}
+
+function isDeletedEditConversationId(conversationId) {
+  return Boolean(
+    conversationId &&
+      state.deletedEditConversationIds instanceof Set &&
+      state.deletedEditConversationIds.has(conversationId)
+  );
+}
+
+function rememberDeletedEditConversationId(conversationId) {
+  if (!conversationId) {
+    return;
+  }
+  if (!(state.deletedEditConversationIds instanceof Set)) {
+    state.deletedEditConversationIds = new Set();
+  }
+  state.deletedEditConversationIds.add(conversationId);
+  saveDeletedEditConversationIds();
+}
+
+function forgetDeletedEditConversationId(conversationId) {
+  if (!conversationId || !(state.deletedEditConversationIds instanceof Set)) {
+    return;
+  }
+  if (state.deletedEditConversationIds.delete(conversationId)) {
+    saveDeletedEditConversationIds();
+  }
+}
+
+function conversationIdFromHistoryRecord(record, fallback = "") {
+  return typeof record?.conversation_id === "string" && record.conversation_id.trim()
+    ? record.conversation_id.trim()
+    : fallback;
+}
+
 function normalizePersistedEditConversations(source) {
   if (!Array.isArray(source)) {
     return [];
@@ -1186,6 +1249,7 @@ function normalizePersistedEditConversations(source) {
         messages,
       };
     })
+    .filter((conversation) => !isDeletedEditConversationId(conversation.id))
     .filter((conversation) => conversation.messages.length > 0)
     .slice(0, 30);
 }
@@ -1384,6 +1448,20 @@ function getInputImageUrlsFromRecord(record) {
   return Array.isArray(record?.input_image_urls)
     ? record.input_image_urls.filter((item) => typeof item === "string" && item)
     : [];
+}
+
+function filterDeletedEditConversationHistory(records = []) {
+  if (!Array.isArray(records)) {
+    return [];
+  }
+  return records.filter((record, index) => {
+    if (record?.task_key !== "image-edit" && record?.task_key !== "image-agent") {
+      return true;
+    }
+    const fallbackId = `history-${record?.run_id || index}`;
+    const conversationId = conversationIdFromHistoryRecord(record, fallbackId);
+    return !isDeletedEditConversationId(conversationId);
+  });
 }
 
 function getMessageInputImageUrls(message) {
@@ -1608,6 +1686,13 @@ function reconstructEditConversationsFromHistory(records = []) {
     .reverse();
 
   filteredRecords.forEach((record, index) => {
+    const conversationId = conversationIdFromHistoryRecord(
+      record,
+      `history-${record?.run_id || index}`
+    );
+    if (isDeletedEditConversationId(conversationId)) {
+      return;
+    }
     const summary = record?.summary || {};
     const renders = Array.isArray(summary?.renders) ? summary.renders : [];
     const firstPrompt = renders.find(
@@ -1640,10 +1725,6 @@ function reconstructEditConversationsFromHistory(records = []) {
     const latestRecordItems = imageItemsFromRecord(record, conversationTitle);
     const latestResultItems = resultItems.length ? resultItems : latestRecordItems;
     const agentResponseText = agentResponseTextFromSummary(summary);
-    const conversationId =
-      typeof record?.conversation_id === "string" && record.conversation_id.trim()
-        ? record.conversation_id.trim()
-        : `history-${record?.run_id || index}`;
     const message = {
       id: `history-msg-${record?.run_id || index}`,
       prompt,
@@ -1887,6 +1968,7 @@ function createEditConversation(options = {}) {
     updatedAt: now,
     messages: [],
   };
+  forgetDeletedEditConversationId(conversation.id);
   state.editConversations.unshift(conversation);
   state.editConversationId = conversation.id;
   if (options.persist !== false) {
@@ -1953,6 +2035,7 @@ async function deleteEditConversation(conversationId) {
       })
     );
   }
+  rememberDeletedEditConversationId(conversationId);
   state.editConversations = state.editConversations.filter(
     (item) => item.id !== conversationId
   );
@@ -1960,9 +2043,19 @@ async function deleteEditConversation(conversationId) {
     (Array.isArray(payload?.deleted_run_ids) ? payload.deleted_run_ids : [])
       .filter((runId) => typeof runId === "string" && runId)
   );
+  const deletedJobIds = new Set(
+    (Array.isArray(payload?.deleted_job_ids) ? payload.deleted_job_ids : [])
+      .filter((jobId) => typeof jobId === "string" && jobId)
+  );
   localRunIds.forEach((runId) => deletedRunIds.add(runId));
   if (deletedRunIds.size) {
     state.history = state.history.filter((record) => !deletedRunIds.has(record.run_id));
+    state.jobs = state.jobs.filter(
+      (job) => !deletedRunIds.has(job.record?.run_id) && !deletedJobIds.has(job.job_id)
+    );
+    if (state.currentJobId && !state.jobs.some((job) => job.job_id === state.currentJobId)) {
+      state.currentJobId = resolveCurrentJobId();
+    }
     state.editConversations.forEach((item) => {
       item.messages = (item.messages || []).filter(
         (message) => !deletedRunIds.has(message.runId)
@@ -1983,6 +2076,7 @@ async function deleteEditConversation(conversationId) {
     JSON.stringify(serializeEditConversations())
   );
   renderHistory();
+  renderTaskBoard();
   renderEditWorkspace();
 }
 
@@ -5372,7 +5466,7 @@ async function refreshSharedPool() {
 
 async function refreshHistory() {
   try {
-    const history = await apiFetch("/api/history");
+    const history = filterDeletedEditConversationHistory(await apiFetch("/api/history"));
     const signature = stableJsonSignature(history);
     if (signature === state.lastHistorySignature) {
       return;

@@ -205,6 +205,16 @@ def _delete_job_for_user(item: dict[str, Any], user_id: str, *, run_id: str | No
     }
 
 
+def _conversation_id_for_job(item: dict[str, Any]) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    payload_conversation_id = str(payload.get("conversation_id") or "").strip()
+    if payload_conversation_id:
+        return payload_conversation_id
+    result = item.get("result") if isinstance(item.get("result"), dict) else {}
+    record = result.get("record") if isinstance(result.get("record"), dict) else {}
+    return str(record.get("conversation_id") or "").strip()
+
+
 def _task_response(job: dict[str, Any]) -> dict[str, Any]:
     shared_pool = _shared_pool(job["user_id"])
     return {
@@ -432,9 +442,40 @@ def update_edit_conversations(
     return {"status": "ok", "count": 0}
 
 
-@router.delete("/edit-conversations/{_conversation_id}")
-def delete_edit_conversation(_conversation_id: str, _user: dict = Depends(require_csrf_user)) -> dict[str, Any]:
-    return {"status": "deleted", "deleted_run_ids": []}
+@router.delete("/edit-conversations/{conversation_id}")
+def delete_edit_conversation(
+    conversation_id: str,
+    user: dict = Depends(require_csrf_user),
+) -> dict[str, Any]:
+    target_conversation_id = str(conversation_id or "").strip()
+    if not target_conversation_id:
+        raise HTTPException(status_code=400, detail="conversation_id_required")
+
+    deleted_run_ids: list[str] = []
+    deleted_job_ids: list[str] = []
+    skipped_job_ids: list[str] = []
+
+    for item in list_jobs(user_id=user["id"], limit=200):
+        if item.get("task_type") not in {"image-edit", "image-agent"}:
+            continue
+        if _conversation_id_for_job(item) != target_conversation_id:
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else {}
+        record = result.get("record") if isinstance(result.get("record"), dict) else {}
+        run_id = str(record.get("run_id") or item["id"])
+        if item.get("status") in {"queued", "running"}:
+            skipped_job_ids.append(item["id"])
+            continue
+        deleted = _delete_job_for_user(item, user["id"], run_id=run_id)
+        deleted_run_ids.append(str(deleted.get("run_id") or run_id))
+        deleted_job_ids.append(str(deleted.get("job_id") or item["id"]))
+
+    return {
+        "status": "deleted",
+        "deleted_run_ids": deleted_run_ids,
+        "deleted_job_ids": deleted_job_ids,
+        "skipped_job_ids": skipped_job_ids,
+    }
 
 
 @router.get("/logs")

@@ -85,7 +85,7 @@ body::before {
 
 .topbar {
   display: grid;
-  grid-template-columns: 230px 1fr auto;
+  grid-template-columns: minmax(260px, 1fr) auto minmax(260px, 1fr);
   gap: 12px;
   align-items: center;
   padding: 12px 14px;
@@ -147,6 +147,7 @@ body::before {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
+  justify-self: center;
   gap: 8px;
 }
 
@@ -187,6 +188,7 @@ body::before {
 
 .top-actions {
   display: flex;
+  justify-self: end;
   align-items: center;
   gap: 8px;
 }
