@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from .storage_service import job_storage_dir
-from .task_service import list_job_events
+from .task_service import (
+    list_job_events,
+    list_recent_audit_logs,
+    list_recent_client_logs,
+    list_recent_job_events,
+)
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 THUMBNAIL_SUFFIXES = {".webp"}
 LOG_TAIL_BYTES = 256 * 1024
+USER_LOG_LINE_LIMIT = 2000
+ADMIN_LOG_LINE_LIMIT = 10000
+CHINA_TZ = timezone(timedelta(hours=8))
 
 
 def read_json_file(path: str | Path | None) -> dict[str, Any]:
@@ -27,7 +36,25 @@ def read_json_file(path: str | Path | None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def read_text_tail(path: str | Path | None, *, max_bytes: int = LOG_TAIL_BYTES) -> str:
+def limit_text_lines(content: str, *, max_lines: int | None = None) -> str:
+    if not max_lines or max_lines <= 0:
+        return content
+    lines = content.splitlines()
+    if len(lines) <= max_lines:
+        return content
+    omitted = len(lines) - max_lines
+    return (
+        f"... only showing last {max_lines} lines, omitted {omitted} earlier lines ...\n"
+        + "\n".join(lines[-max_lines:])
+    )
+
+
+def read_text_tail(
+    path: str | Path | None,
+    *,
+    max_bytes: int = LOG_TAIL_BYTES,
+    max_lines: int | None = None,
+) -> str:
     if not path:
         return ""
     try:
@@ -42,9 +69,36 @@ def read_text_tail(path: str | Path | None, *, max_bytes: int = LOG_TAIL_BYTES) 
             else:
                 prefix = ""
             data = handle.read()
-        return prefix + data.decode("utf-8", errors="replace")
+        return limit_text_lines(
+            prefix + data.decode("utf-8", errors="replace"),
+            max_lines=max_lines,
+        )
     except Exception as exc:
         return f"读取日志失败: {exc}"
+
+
+def format_china_time(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        if text.endswith("Z"):
+            parsed = datetime.fromisoformat(text[:-1] + "+00:00")
+        else:
+            parsed = datetime.fromisoformat(text)
+            if parsed.tzinfo is None:
+                return text
+        return parsed.astimezone(CHINA_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return text
+
+
+def with_china_time_fields(item: dict[str, Any], *fields: str) -> dict[str, Any]:
+    copy = dict(item)
+    for field in fields:
+        if field in copy:
+            copy[field] = format_china_time(copy.get(field))
+    return copy
 
 
 def _job_data_dir(job: dict[str, Any]) -> Path:
@@ -373,7 +427,100 @@ def serialize_job(job: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def collect_job_log_entries(job: dict[str, Any]) -> dict[str, Any]:
+def _event_lines(events: list[dict[str, Any]]) -> list[str]:
+    return [
+        f"[{format_china_time(item.get('created_at', ''))}] [{item.get('level', 'info')}] {item.get('message', '')}"
+        for item in events
+    ]
+
+
+def _json_text(value: Any) -> Any:
+    try:
+        return json.loads(str(value or "{}"))
+    except Exception:
+        return {}
+
+
+def _client_log_lines(items: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for item in items:
+        details = _json_text(item.get("details_json"))
+        suffix = f" {json.dumps(details, ensure_ascii=False)}" if details else ""
+        lines.append(
+            f"[{format_china_time(item.get('created_at', ''))}] [{item.get('level', 'error')}] "
+            f"{item.get('message', '')}{suffix}"
+        )
+    return lines
+
+
+def _audit_log_lines(items: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for item in items:
+        details = _json_text(item.get("details_json"))
+        suffix = f" {json.dumps(details, ensure_ascii=False)}" if details else ""
+        lines.append(
+            f"[{format_china_time(item.get('created_at', ''))}] [audit] {item.get('action', '')} "
+            f"{item.get('target_type', '')}:{item.get('target_id', '')} "
+            f"actor={item.get('actor_id') or ''}{suffix}"
+        )
+    return lines
+
+
+def collect_global_log_entries(
+    *,
+    user_id: str | None,
+    limit: int = USER_LOG_LINE_LIMIT,
+    include_audit: bool = False,
+) -> dict[str, Any]:
+    safe_limit = max(1, int(limit or USER_LOG_LINE_LIMIT))
+    entries = [
+        {
+            "key": "total",
+            "label": "总日志",
+            "path": "database:job_events",
+            "content": limit_text_lines(
+                "\n".join(
+                    _event_lines(list_recent_job_events(user_id=user_id, limit=safe_limit))
+                ).strip(),
+                max_lines=safe_limit,
+            ),
+        },
+        {
+            "key": "client",
+            "label": "前端错误日志",
+            "path": "database:client_logs",
+            "content": limit_text_lines(
+                "\n".join(
+                    _client_log_lines(
+                        list_recent_client_logs(user_id=user_id, limit=safe_limit)
+                    )
+                ).strip(),
+                max_lines=safe_limit,
+            ),
+        },
+    ]
+    if include_audit:
+        entries.append(
+            {
+                "key": "audit",
+                "label": "管理操作日志",
+                "path": "database:audit_logs",
+                "content": limit_text_lines(
+                    "\n".join(
+                        _audit_log_lines(list_recent_audit_logs(limit=safe_limit))
+                    ).strip(),
+                    max_lines=safe_limit,
+                ),
+            }
+        )
+    return {"entries": entries, "selected_key": "total", "scope": "global"}
+
+
+def collect_job_log_entries(
+    job: dict[str, Any],
+    *,
+    max_lines: int | None = USER_LOG_LINE_LIMIT,
+) -> dict[str, Any]:
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     record = result.get("record") if isinstance(result.get("record"), dict) else {}
     job_dir = job_storage_dir(job["user_id"], job["id"])
@@ -387,15 +534,12 @@ def collect_job_log_entries(job: dict[str, Any]) -> dict[str, Any]:
                 "key": "run",
                 "label": "当前任务日志",
                 "path": str(debug_log_file),
-                "content": read_text_tail(debug_log_file),
+                "content": read_text_tail(debug_log_file, max_lines=max_lines),
             }
         )
 
     events = list_job_events(job["id"], user_id=job["user_id"])
-    event_lines = [
-        f"[{item.get('created_at', '')}] [{item.get('level', 'info')}] {item.get('message', '')}"
-        for item in events
-    ]
+    event_lines = _event_lines(events)
     if job.get("error") and not any(str(job["error"]) in line for line in event_lines):
         event_lines.append(f"[error] {job['error']}")
     entries.append(
@@ -403,7 +547,7 @@ def collect_job_log_entries(job: dict[str, Any]) -> dict[str, Any]:
             "key": "events",
             "label": "平台任务事件",
             "path": "database:job_events",
-            "content": "\n".join(event_lines).strip(),
+            "content": limit_text_lines("\n".join(event_lines).strip(), max_lines=max_lines),
         }
     )
 
@@ -413,7 +557,7 @@ def collect_job_log_entries(job: dict[str, Any]) -> dict[str, Any]:
             "key": "app",
             "label": "Pipeline 应用日志",
             "path": str(app_log_path),
-            "content": read_text_tail(app_log_path),
+            "content": read_text_tail(app_log_path, max_lines=max_lines),
         }
     )
 
@@ -424,9 +568,9 @@ def collect_job_log_entries(job: dict[str, Any]) -> dict[str, Any]:
                 "key": "backend",
                 "label": "后端服务日志",
                 "path": str(backend_log_path),
-                "content": read_text_tail(backend_log_path),
+                "content": read_text_tail(backend_log_path, max_lines=max_lines),
             }
         )
 
     selected_key = "run" if entries and entries[0]["key"] == "run" else entries[0]["key"]
-    return {"entries": entries, "selected_key": selected_key}
+    return {"entries": entries, "selected_key": selected_key, "scope": "job"}

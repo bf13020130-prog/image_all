@@ -63,6 +63,7 @@ const state = {
   userPromptPristine: true,
   logEntries: [],
   currentLogKey: "app",
+  logScope: "global",
   isLogModalOpen: false,
   isImageModalOpen: false,
   imageModalLastPointerButton: null,
@@ -76,6 +77,9 @@ const state = {
   lastJobsSignature: "",
   lastHistorySignature: "",
   lastSharedPoolSignature: "",
+  knownJobStatuses: {},
+  audioContext: null,
+  audioUnlocked: false,
   editInputAttachments: [],
   editConversations: [],
   editConversationId: null,
@@ -107,8 +111,18 @@ const AGENT_CONTEXT_MAX_RESULT_URLS = 8;
 const AGENT_CONTEXT_MAX_ATTACHMENTS = 12;
 const AGENT_CONTEXT_MAX_IMAGE_REFS = 48;
 const IMAGE_MODEL_GPT_IMAGE_2 = "gpt-image-2";
+const GPT_IMAGE_2_1K_MODEL_ID = "gpt-image-2-1k";
 const IMAGE_MODEL_NANO_BANANA_2 = "gemini-3.1-flash-image-preview";
 const IMAGE_MODEL_NANO_BANANA_PRO = "gemini-3-pro-image-preview";
+const API_BASE_SETTING_KEYS = new Set([
+  "llm_api_base",
+  "color_match_api_base",
+  "image_agent_api_base",
+  "image_api_base",
+  "gpt_image_1k_api_base",
+  "gpt_image_api_base",
+  "gemini_image_api_base",
+]);
 const LEGACY_IMAGE_MODEL_ALIASES = {
   "nano-banana-2": IMAGE_MODEL_NANO_BANANA_2,
   "nano-banana-2-1k": IMAGE_MODEL_NANO_BANANA_2,
@@ -150,6 +164,92 @@ function deletedEditConversationsStorageKey() {
   return `imagReplicate2.user.${currentUserStorageToken()}.deletedImageEditConversationIds`;
 }
 
+function taskSoundStorageKey() {
+  return `imagReplicate2.user.${currentUserStorageToken()}.taskSoundEnabled`;
+}
+
+function isTaskSoundEnabled() {
+  return window.localStorage.getItem(taskSoundStorageKey()) !== "0";
+}
+
+function unlockTaskAudio() {
+  if (state.audioUnlocked) {
+    return;
+  }
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) {
+    return;
+  }
+  try {
+    state.audioContext = state.audioContext || new AudioContextCtor();
+    if (state.audioContext.state === "suspended") {
+      void state.audioContext.resume();
+    }
+    state.audioUnlocked = true;
+  } catch (_error) {
+    state.audioUnlocked = false;
+  }
+}
+
+function playTaskTone(kind) {
+  if (!isTaskSoundEnabled()) {
+    return;
+  }
+  unlockTaskAudio();
+  const context = state.audioContext;
+  if (!context) {
+    return;
+  }
+  const now = context.currentTime;
+  const notes = kind === "failed" ? [440, 196] : [523, 880];
+  const peakGain = 1;
+  const noteGap = kind === "failed" ? 0.12 : 0.11;
+  const noteDuration = kind === "failed" ? 0.2 : 0.16;
+  notes.forEach((frequency, index) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = kind === "failed" ? "triangle" : "sine";
+    oscillator.frequency.value = frequency;
+    const start = now + index * noteGap;
+    const end = start + noteDuration;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(peakGain, start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, end);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(end + 0.02);
+  });
+}
+
+function markJobQueuedForSound(jobId) {
+  if (!jobId) {
+    return;
+  }
+  state.knownJobStatuses[jobId] = "queued";
+}
+
+function maybeNotifyJobStatusChanges(jobs) {
+  const nextStatuses = {};
+  jobs.forEach((job) => {
+    const jobId = job.job_id || job.id;
+    if (!jobId) {
+      return;
+    }
+    const status = job.status || "";
+    const previous = state.knownJobStatuses[jobId];
+    nextStatuses[jobId] = status;
+    if (!previous || previous === status) {
+      return;
+    }
+    if (status === "completed" || status === "partial") {
+      playTaskTone("completed");
+    } else if (status === "failed") {
+      playTaskTone("failed");
+    }
+  });
+  state.knownJobStatuses = nextStatuses;
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   void initializePlatformApp();
 });
@@ -159,6 +259,7 @@ async function initializePlatformApp() {
   cacheDom();
   reportStartupStep("dom-cached");
   enhancePasswordFields();
+  hardenSettingsAutofill();
   reportStartupStep("password-fields-enhanced");
   bindEvents();
   bindPlatformActions();
@@ -468,6 +569,8 @@ function cacheDom() {
   refs.logEntryTitle = document.getElementById("logEntryTitle");
   refs.logEntryPath = document.getElementById("logEntryPath");
   refs.logModalContent = document.getElementById("logModalContent");
+  refs.openGlobalLogsButton = document.getElementById("openGlobalLogsButton");
+  refs.openCurrentJobLogsButton = document.getElementById("openCurrentJobLogsButton");
   refs.refreshLogsButton = document.getElementById("refreshLogsButton");
   refs.openLogsFolderButton = document.getElementById("openLogsFolderButton");
   refs.logModalCloseButtons = Array.from(
@@ -500,6 +603,11 @@ function cacheDom() {
 
 function enhancePasswordFields() {
   document.querySelectorAll('input[type="password"]').forEach((input) => {
+    if (isSettingsInput(input)) {
+      input.autocomplete = "new-password";
+      input.setAttribute("data-lpignore", "true");
+      input.setAttribute("data-1p-ignore", "true");
+    }
     if (input.closest(".password-reveal")) {
       return;
     }
@@ -550,7 +658,40 @@ function enhancePasswordFields() {
   });
 }
 
+function isSettingsInput(element) {
+  return Boolean(element?.closest?.("#settingsForm"));
+}
+
+function hardenSettingsAutofill() {
+  if (!refs.settingsForm) {
+    return;
+  }
+  refs.settingsForm.autocomplete = "off";
+  Array.from(refs.settingsForm.elements).forEach((element) => {
+    if (!element.name) {
+      return;
+    }
+    if (API_BASE_SETTING_KEYS.has(element.name)) {
+      element.autocomplete = "off";
+      element.inputMode = "url";
+      element.spellcheck = false;
+    }
+    if (isSecretSettingField(element)) {
+      element.autocomplete = "new-password";
+      element.setAttribute("data-lpignore", "true");
+      element.setAttribute("data-1p-ignore", "true");
+    }
+  });
+}
+
 function bindEvents() {
+  window.addEventListener(
+    "pointerdown",
+    () => {
+      unlockTaskAudio();
+    },
+    { once: true }
+  );
   refs.navChips.forEach((chip) => {
     chip.addEventListener("click", () => setRoute(chip.dataset.route));
   });
@@ -672,6 +813,18 @@ function bindEvents() {
 
   refs.openLogModalButton.addEventListener("click", () => {
     void openLogModal();
+  });
+  refs.openGlobalLogsButton?.addEventListener("click", () => {
+    state.logScope = "global";
+    state.logTargetJobId = null;
+    state.currentLogKey = "total";
+    void refreshLogs();
+  });
+  refs.openCurrentJobLogsButton?.addEventListener("click", () => {
+    state.logScope = "job";
+    state.logTargetJobId = state.currentJobId || resolveCurrentJobId();
+    state.currentLogKey = "run";
+    void refreshLogs();
   });
   refs.refreshLogsButton.addEventListener("click", () => {
     void refreshLogs();
@@ -1048,25 +1201,25 @@ function renderTaskBoard() {
   renderTaskBoardFor({
     board: refs.taskBoard,
     taskKey: "style-replicate",
-    statuses: ["queued", "running", "failed", "partial"],
+    statuses: ["queued", "running", "completed", "partial", "failed"],
     emptyText: "提交后复刻风格图片任务会出现在这里。",
   });
   renderTaskBoardFor({
     board: refs.replicate2TaskBoard,
     taskKey: "style-replicate-v2",
-    statuses: ["queued", "running", "failed", "partial"],
+    statuses: ["queued", "running", "completed", "partial", "failed"],
     emptyText: "提交后复刻风格图片2任务会出现在这里。",
   });
   renderTaskBoardFor({
     board: refs.editTaskBoard,
     taskKey: ["image-edit", "image-agent"],
-    statuses: ["queued", "running", "failed", "partial"],
+    statuses: ["queued", "running", "completed", "partial", "failed"],
     emptyText: "当前没有运行中或刚失败的图片生成任务。",
   });
   renderTaskBoardFor({
     board: refs.colorTaskBoard,
     taskKey: "color-match",
-    statuses: ["queued", "running", "failed", "partial"],
+    statuses: ["queued", "running", "completed", "partial", "failed"],
     emptyText: "提交后追色任务会出现在这里。",
   });
 }
@@ -3626,12 +3779,41 @@ async function saveSettings() {
 function collectSettingsPayload() {
   const payload = {};
   Array.from(refs.settingsForm.elements).forEach((element) => {
-    if (element.name) {
-      payload[element.name] =
-        element.type === "checkbox" ? element.checked : element.value;
+    if (!element.name) {
+      return;
     }
+    if (API_BASE_SETTING_KEYS.has(element.name) && !isValidApiBaseValue(element.value)) {
+      element.value = state.settings?.[element.name] || "";
+      return;
+    }
+    if (
+      element.name === "image_model_gpt_image_2_1k" ||
+      element.name === "image_model_gpt_image_2"
+    ) {
+      element.value = normalizeConfiguredImageModelId(element.value);
+    }
+    payload[element.name] =
+      element.type === "checkbox" ? element.checked : element.value;
   });
   return payload;
+}
+
+function isValidApiBaseValue(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return true;
+  }
+  try {
+    const url = new URL(text);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch (_error) {
+    return false;
+  }
+}
+
+function normalizeConfiguredImageModelId(value) {
+  const text = String(value || "").trim();
+  return text === "gpt-image-2-1K" ? GPT_IMAGE_2_1K_MODEL_ID : text;
 }
 
 function getLimit(key, fallback) {
@@ -3654,6 +3836,7 @@ async function submitReplicateTask() {
       body: formData,
     });
     state.currentJobId = payload.job_id;
+    markJobQueuedForSound(payload.job_id);
     await refreshSharedPool();
     if (state.isLogModalOpen) {
       state.logTargetJobId = payload.job_id;
@@ -3685,6 +3868,7 @@ async function submitReplicate2Task() {
       body: formData,
     });
     state.currentJobId = payload.job_id;
+    markJobQueuedForSound(payload.job_id);
     await refreshSharedPool();
     if (state.isLogModalOpen) {
       state.logTargetJobId = payload.job_id;
@@ -3716,6 +3900,7 @@ async function submitColorMatchTask() {
       body: formData,
     });
     state.currentJobId = payload.job_id;
+    markJobQueuedForSound(payload.job_id);
     await refreshSharedPool();
     if (state.isLogModalOpen) {
       state.logTargetJobId = payload.job_id;
@@ -3863,6 +4048,7 @@ async function submitImageEditRequest({
       body: formData,
     });
     state.currentJobId = payload.job_id;
+    markJobQueuedForSound(payload.job_id);
     await refreshSharedPool();
     message.jobId = payload.job_id;
     message.status = payload.status || "queued";
@@ -5332,10 +5518,12 @@ async function openDownloadSelection(jobId) {
   document.body.appendChild(shell);
 }
 
-async function openLogModal(jobId = state.currentJobId) {
+async function openLogModal(jobId = null) {
   refs.logModal.hidden = false;
   state.isLogModalOpen = true;
-  state.logTargetJobId = jobId || state.currentJobId || null;
+  state.logScope = jobId ? "job" : "global";
+  state.logTargetJobId = jobId || null;
+  state.currentLogKey = state.logScope === "global" ? "total" : "run";
   await refreshLogs();
 }
 
@@ -5343,16 +5531,18 @@ function closeLogModal() {
   refs.logModal.hidden = true;
   state.isLogModalOpen = false;
   state.logTargetJobId = null;
+  state.logScope = "global";
 }
 
 async function refreshLogs() {
   try {
     const query = new URLSearchParams();
-    const effectiveJobId =
-      state.logTargetJobId ||
-      (state.isLogModalOpen ? null : state.currentJobId);
-    if (effectiveJobId) {
-      query.set("job_id", effectiveJobId);
+    query.set("scope", state.logScope || "global");
+    if (state.logScope === "job") {
+      const effectiveJobId = state.logTargetJobId || state.currentJobId;
+      if (effectiveJobId) {
+        query.set("job_id", effectiveJobId);
+      }
     }
     const suffix = query.toString() ? `?${query.toString()}` : "";
     const payload = await apiFetch(`/api/logs${suffix}`);
@@ -5448,6 +5638,7 @@ async function refreshCurrentJob() {
     const signature = stableJsonSignature(jobs);
     const changed = signature !== state.lastJobsSignature;
     state.lastJobsSignature = signature;
+    maybeNotifyJobStatusChanges(jobs);
     state.jobs = jobs;
     if (
       !state.currentJobId ||

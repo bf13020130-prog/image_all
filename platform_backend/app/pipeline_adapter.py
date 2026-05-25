@@ -230,6 +230,7 @@ def _copy_registered_artifacts(
     image_sources: list[Path] = []
     diagnostic_sources: list[Path] = []
     renamed_image_paths: dict[str, str] = {}
+    renamed_thumbnail_paths: dict[str, str] = {}
 
     def collect_file(source: Path, bucket: list[Path]) -> None:
         if not source.exists() or not source.is_file():
@@ -273,6 +274,9 @@ def _copy_registered_artifacts(
         pipeline_thumbnail = pipeline_app.thumbnail_path_for_image(pipeline_target)
         if pipeline_thumbnail.exists() and pipeline_thumbnail.resolve() not in copied_sources:
             copied_sources.add(pipeline_thumbnail.resolve())
+            source_thumbnail = pipeline_app.thumbnail_path_for_image(source)
+            if source_thumbnail.exists():
+                renamed_thumbnail_paths[str(source_thumbnail.resolve())] = str(pipeline_thumbnail)
             copy_file(
                 pipeline_thumbnail.resolve(),
                 output_dir,
@@ -305,7 +309,13 @@ def _copy_registered_artifacts(
         )
         for offset, source in enumerate(image_sources):
             copy_image_with_thumbnail(source, start + offset)
-        _refresh_record_image_paths(record, renamed_image_paths)
+        _refresh_record_image_paths(
+            record,
+            {
+                **renamed_image_paths,
+                **renamed_thumbnail_paths,
+            },
+        )
 
     for source in diagnostic_sources:
         copy_file(source, json_dir, "diagnostic")
@@ -501,7 +511,13 @@ def run_pipeline_job(job: dict[str, Any]) -> dict[str, Any]:
             concurrency=_bounded_concurrency(payload, settings),
             reference_source=reference,
         )
-        record = pipeline_app.run_style_replicate2_pipeline(context, settings, options, logger)
+        record = pipeline_app.run_style_replicate2_pipeline(
+            context,
+            settings,
+            options,
+            logger,
+            progress_callback=progress_callback,
+        )
     elif task_type == "style-replicate":
         style_source = _source_from_payload(payload, "style")
         product_source = _source_from_payload(payload, "product")
@@ -524,7 +540,13 @@ def run_pipeline_job(job: dict[str, Any]) -> dict[str, Any]:
             style_source=style_source,
             product_source=product_source,
         )
-        record = pipeline_app.run_pipeline(context, settings, options, logger)
+        record = pipeline_app.run_pipeline(
+            context,
+            settings,
+            options,
+            logger,
+            progress_callback=progress_callback,
+        )
     else:
         raise pipeline_app.AppError(f"不支持的任务类型：{task_type}")
 

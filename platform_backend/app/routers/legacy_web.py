@@ -4,13 +4,18 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from ..auth import require_active_user, require_csrf_user
+from ..auth import get_current_user, require_active_user, require_csrf_user
 from ..database import connect, json_dumps, json_loads, transaction
 from ..download_service import build_job_zip, collect_job_download_files
-from ..legacy_contract import collect_job_log_entries, serialize_job as serialize_legacy_job
+from ..legacy_contract import (
+    USER_LOG_LINE_LIMIT,
+    collect_global_log_entries,
+    collect_job_log_entries,
+    serialize_job as serialize_legacy_job,
+)
 from ..settings_service import (
     get_user_secrets,
     get_user_settings,
@@ -20,7 +25,15 @@ from ..settings_service import (
 )
 from ..security import utc_now
 from ..storage_service import delete_job_storage, save_uploads
-from ..task_service import create_job, finish_job, get_job, get_user_quota, list_jobs, update_job_payload
+from ..task_service import (
+    add_client_log,
+    create_job,
+    finish_job,
+    get_job,
+    get_user_quota,
+    list_jobs,
+    update_job_payload,
+)
 from ..task_service import count_active_request_slots, release_job_request_slots
 from ..config import CONFIG
 
@@ -320,8 +333,28 @@ def _settings_for_legacy_form(user_id: str) -> dict[str, Any]:
 
 
 @router.post("/client-log")
-async def client_log() -> dict[str, str]:
-    return {"status": "ignored"}
+async def client_log(
+    request: Request,
+    payload: dict[str, Any] | None = Body(default=None),
+) -> dict[str, str]:
+    user: dict[str, Any] | None = None
+    try:
+        user = get_current_user(request)
+    except Exception:
+        user = None
+    body = payload if isinstance(payload, dict) else {}
+    add_client_log(
+        user_id=user.get("id") if isinstance(user, dict) else None,
+        level=str(body.get("level") or "error"),
+        message=str(
+            body.get("message")
+            or body.get("type")
+            or body.get("event")
+            or "client_log"
+        ),
+        details={key: value for key, value in body.items() if key not in {"message"}},
+    )
+    return {"status": "ok"}
 
 
 @router.get("/bootstrap")
@@ -547,8 +580,13 @@ def delete_edit_conversation(
 def logs(
     job_id: str | None = None,
     run_id: str | None = None,
+    scope: str = "global",
+    limit: int = USER_LOG_LINE_LIMIT,
     user: dict = Depends(require_active_user),
 ) -> dict[str, Any]:
+    safe_limit = max(1, min(int(limit or USER_LOG_LINE_LIMIT), USER_LOG_LINE_LIMIT))
+    if str(scope or "").strip().lower() == "global" and not job_id and not run_id:
+        return collect_global_log_entries(user_id=user["id"], limit=safe_limit)
     selected_job = get_job(job_id, user_id=user["id"]) if job_id else None
     if not selected_job and run_id:
         for item in list_jobs(user_id=user["id"], limit=200):
@@ -561,7 +599,7 @@ def logs(
         selected_job = next(iter(list_jobs(user_id=user["id"], limit=1)), None)
     if not selected_job:
         return {"entries": [], "selected_key": "events"}
-    return collect_job_log_entries(selected_job)
+    return collect_job_log_entries(selected_job, max_lines=safe_limit)
 
 
 @router.post("/logs/open")

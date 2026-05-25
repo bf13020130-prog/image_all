@@ -9,7 +9,7 @@ from .database import init_db
 from .download_service import cleanup_old_downloads
 from .pipeline_adapter import run_pipeline_job
 from .storage_service import job_storage_dir, register_artifact
-from .task_service import claim_next_job, cleanup_expired_job_history, finish_job
+from .task_service import claim_next_job, cleanup_expired_job_history, cleanup_expired_logs, finish_job
 
 
 def run_job(job: dict) -> None:
@@ -72,6 +72,7 @@ def run_forever(
     CONFIG.ensure_dirs()
     cleanup_old_downloads()
     cleanup_expired_job_history(retention_days=CONFIG.history_retention_days)
+    cleanup_expired_logs(retention_days=CONFIG.log_retention_days)
     cleanup_interval_seconds = max(3600, int(CONFIG.history_cleanup_interval_hours) * 3600)
     last_cleanup = time.monotonic()
     max_workers = max(1, int(CONFIG.worker_concurrency))
@@ -95,6 +96,7 @@ def run_forever(
             if time.monotonic() - last_cleanup >= cleanup_interval_seconds:
                 cleanup_old_downloads()
                 cleanup_expired_job_history(retention_days=CONFIG.history_retention_days)
+                cleanup_expired_logs(retention_days=CONFIG.log_retention_days)
                 last_cleanup = time.monotonic()
 
             should_stop = bool(stop_event and stop_event.is_set())

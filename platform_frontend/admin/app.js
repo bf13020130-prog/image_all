@@ -15,6 +15,11 @@ const SECRET_FIELDS = new Set([
   "gemini_image_api_key",
 ]);
 
+function normalizeConfiguredImageModelId(value) {
+  const text = String(value || "").trim();
+  return text === "gpt-image-2-1K" ? "gpt-image-2-1k" : text;
+}
+
 const STATIC_OPTIONS = {
   reasoning_effort: ["none", "low", "medium", "high", "xhigh"],
   reasoning_wire_format: ["reasoning_effort", "reasoning"],
@@ -171,6 +176,7 @@ document.addEventListener("DOMContentLoaded", () => {
   refs.createUserForm = document.getElementById("createUserForm");
   refs.settingsForm = document.getElementById("settingsForm");
   refs.saveGlobalSettingsButton = document.getElementById("saveGlobalSettingsButton");
+  refs.openAdminLogsButton = document.getElementById("openAdminLogsButton");
   refs.refreshButton = document.getElementById("refreshButton");
   refs.logModal = document.getElementById("logModal");
   refs.logModalTitle = document.getElementById("logModalTitle");
@@ -192,6 +198,7 @@ document.addEventListener("DOMContentLoaded", () => {
     void runAction(() => createUser());
   });
   refs.saveGlobalSettingsButton.addEventListener("click", () => void runAction(() => saveGlobalSettings()));
+  refs.openAdminLogsButton.addEventListener("click", () => void runAction(() => openAdminLogs()));
   refs.refreshButton.addEventListener("click", () => void runAction(() => loadAll()));
   refs.logModalCloseButtons.forEach((button) => {
     button.addEventListener("click", () => closeLogModal());
@@ -612,7 +619,12 @@ async function saveGlobalSettings() {
 function collectSettings() {
   const settings = {};
   refs.settingsForm.querySelectorAll("[data-setting]").forEach((input) => {
-    settings[input.dataset.setting] = readControlValue(input);
+    const key = input.dataset.setting;
+    const value = readControlValue(input);
+    settings[key] =
+      key === "image_model_gpt_image_2_1k" || key === "image_model_gpt_image_2"
+        ? normalizeConfiguredImageModelId(value)
+        : value;
   });
   return settings;
 }
@@ -666,6 +678,16 @@ async function openJobLogs(jobId, loadingTitle = "日志加载中") {
   refs.logModalContent.textContent = "正在读取日志...";
 
   const payload = await api(`/api/v1/admin/jobs/${encodeURIComponent(jobId)}/logs`);
+  renderLogEntries(payload);
+}
+
+async function openAdminLogs() {
+  refs.logModal.hidden = false;
+  refs.logModalTitle.textContent = "总日志";
+  refs.logEntryPath.textContent = "";
+  refs.logEntryTabs.innerHTML = "";
+  refs.logModalContent.textContent = "正在读取日志...";
+  const payload = await api("/api/v1/admin/logs");
   renderLogEntries(payload);
 }
 

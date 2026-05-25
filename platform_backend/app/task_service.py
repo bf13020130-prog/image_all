@@ -76,6 +76,33 @@ def add_job_event(
         )
 
 
+def add_client_log(
+    *,
+    user_id: str | None,
+    message: str,
+    level: str = "error",
+    details: dict[str, Any] | None = None,
+) -> None:
+    text = str(message or "").strip()
+    if not text:
+        return
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO client_logs (id, user_id, level, message, details_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id("clog"),
+                user_id,
+                str(level or "error")[:32],
+                text[:4000],
+                json_dumps(details or {}),
+                utc_now(),
+            ),
+        )
+
+
 def allocate_user_image_sequence(
     *,
     user_id: str,
@@ -421,6 +448,27 @@ def cleanup_expired_job_history(*, retention_days: int) -> int:
     return removed
 
 
+def cleanup_expired_logs(*, retention_days: int) -> int:
+    cutoff = _history_cutoff(retention_days)
+    removed = 0
+    with transaction() as conn:
+        for table in ("client_logs", "audit_logs"):
+            cursor = conn.execute(f"DELETE FROM {table} WHERE created_at < ?", (cutoff,))
+            removed += int(cursor.rowcount or 0)
+        cursor = conn.execute(
+            """
+            DELETE FROM job_events
+            WHERE created_at < ?
+              AND NOT EXISTS (
+                SELECT 1 FROM jobs WHERE jobs.id = job_events.job_id
+              )
+            """,
+            (cutoff,),
+        )
+        removed += int(cursor.rowcount or 0)
+    return removed
+
+
 def get_job(job_id: str, *, user_id: str | None = None) -> dict[str, Any] | None:
     params: list[Any] = [job_id]
     where = "id = ?"
@@ -445,6 +493,70 @@ def list_job_events(job_id: str, *, user_id: str | None = None) -> list[dict[str
             params,
         ).fetchall()
     return [row_to_dict(row) or {} for row in rows]
+
+
+def list_recent_job_events(
+    *,
+    user_id: str | None = None,
+    limit: int = 2000,
+) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 2000), 10000))
+    params: list[Any] = []
+    where = ""
+    if user_id:
+        where = "WHERE user_id = ?"
+        params.append(user_id)
+    params.append(safe_limit)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM job_events
+            {where}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return list(reversed([row_to_dict(row) or {} for row in rows]))
+
+
+def list_recent_client_logs(
+    *,
+    user_id: str | None = None,
+    limit: int = 2000,
+) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 2000), 10000))
+    params: list[Any] = []
+    where = ""
+    if user_id:
+        where = "WHERE user_id = ?"
+        params.append(user_id)
+    params.append(safe_limit)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM client_logs
+            {where}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return list(reversed([row_to_dict(row) or {} for row in rows]))
+
+
+def list_recent_audit_logs(*, limit: int = 10000) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 10000), 20000))
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM audit_logs
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return list(reversed([row_to_dict(row) or {} for row in rows]))
 
 
 def claim_next_job() -> dict[str, Any] | None:

@@ -26,7 +26,7 @@ import urllib.request
 import uuid
 import zipfile
 from dataclasses import dataclass, field, fields
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 try:
@@ -36,12 +36,14 @@ except ImportError:
 
 APP_NAME = "imag_Replicate2"
 APP_TITLE = "imag_Replicate2"
+CHINA_TZ = timezone(timedelta(hours=8))
 DEFAULT_API_BASE = "https://api.bltcy.ai"
 DEFAULT_CHAT_MODEL = "gpt-5.4"
 DEFAULT_COLOR_MATCH_MODEL = "gpt-5.5"
 DEFAULT_IMAGE_AGENT_MODEL = "gpt-5.5"
 DEFAULT_IMAGE_MODEL = "gpt-image-2"
 IMAGE_MODEL_GPT_IMAGE_2 = "gpt-image-2"
+GPT_IMAGE_2_1K_MODEL_ID = "gpt-image-2-1k"
 IMAGE_MODEL_NANO_BANANA_2 = "gemini-3.1-flash-image-preview"
 IMAGE_MODEL_NANO_BANANA_PRO = "gemini-3-pro-image-preview"
 DEFAULT_IMAGE_MODEL_GPT_IMAGE_2_ID = "gpt-image-2"
@@ -60,6 +62,12 @@ LEGACY_IMAGE_MODEL_ALIASES = {
     "nano-banana-pro-2k": IMAGE_MODEL_NANO_BANANA_PRO,
     "nano-banana-pro-4k": IMAGE_MODEL_NANO_BANANA_PRO,
 }
+
+
+def china_now() -> datetime:
+    return datetime.now(CHINA_TZ).replace(tzinfo=None)
+
+
 DEFAULT_REASONING_EFFORT = "xhigh"
 DEFAULT_REASONING_WIRE_FORMAT = "reasoning_effort"
 LLM_ENDPOINT_CHAT_COMPLETIONS = "chat_completions"
@@ -1128,11 +1136,11 @@ class Settings:
             else:
                 raise
         merged["image_model_gpt_image_2"] = (
-            str(merged["image_model_gpt_image_2"]).strip()
+            normalize_configured_image_model_id(merged["image_model_gpt_image_2"])
             or DEFAULT_IMAGE_MODEL_GPT_IMAGE_2_ID
         )
         merged["image_model_gpt_image_2_1k"] = (
-            str(merged["image_model_gpt_image_2_1k"]).strip()
+            normalize_configured_image_model_id(merged["image_model_gpt_image_2_1k"])
             or merged["image_model_gpt_image_2"]
             or DEFAULT_IMAGE_MODEL_GPT_IMAGE_2_ID
         )
@@ -1484,7 +1492,7 @@ class AppLogger:
         )
 
     def log(self, message: str) -> None:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = china_now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] {message}"
         with self._lock:
             append_line(self.app_log_path, line)
@@ -4223,23 +4231,28 @@ def extract_render_payloads(response_json: Any) -> list[dict[str, Any]]:
             return
         payloads.append({"kind": kind, "value": normalized})
 
+    def append_dict_image_payload(value: dict[str, Any]) -> None:
+        before_count = len(payloads)
+        append_payload("b64_json", value.get("b64_json"))
+        inline_data = value.get("inlineData") or value.get("inline_data")
+        if isinstance(inline_data, dict):
+            mime_type = str(inline_data.get("mimeType") or inline_data.get("mime_type") or "")
+            if not mime_type or mime_type.startswith("image/"):
+                append_payload("base64", inline_data.get("data"))
+        image_value = normalized_string(value.get("image"))
+        if image_value:
+            if image_value.startswith(("http://", "https://")):
+                append_payload("url", image_value)
+            elif image_value.startswith("data:") and ";base64," in image_value:
+                append_payload("base64", image_value.split(";base64,", maxsplit=1)[1])
+            else:
+                append_payload("base64", image_value)
+        if len(payloads) == before_count:
+            append_payload("url", value.get("url"))
+
     def visit(value: Any) -> None:
         if isinstance(value, dict):
-            append_payload("b64_json", value.get("b64_json"))
-            append_payload("url", value.get("url"))
-            inline_data = value.get("inlineData") or value.get("inline_data")
-            if isinstance(inline_data, dict):
-                mime_type = str(inline_data.get("mimeType") or inline_data.get("mime_type") or "")
-                if not mime_type or mime_type.startswith("image/"):
-                    append_payload("base64", inline_data.get("data"))
-            image_value = normalized_string(value.get("image"))
-            if image_value:
-                if image_value.startswith(("http://", "https://")):
-                    append_payload("url", image_value)
-                elif image_value.startswith("data:") and ";base64," in image_value:
-                    append_payload("base64", image_value.split(";base64,", maxsplit=1)[1])
-                else:
-                    append_payload("base64", image_value)
+            append_dict_image_payload(value)
             for nested in value.values():
                 visit(nested)
         elif isinstance(value, list):
@@ -4255,6 +4268,27 @@ def extract_render_payloads(response_json: Any) -> list[dict[str, Any]]:
             seen.add(marker)
             unique.append(payload)
     return unique
+
+
+def summarize_render_response_without_payload(response_json: Any) -> str:
+    if isinstance(response_json, dict):
+        summary = summarize_error_payload(response_json)
+        if summary and summary != "{}":
+            return truncate_text(summary, 800)
+        shape = {
+            "top_level_keys": sorted(str(key) for key in response_json.keys()),
+            "data_count": len(response_json.get("data") or [])
+            if isinstance(response_json.get("data"), list)
+            else None,
+            "output_count": len(response_json.get("output") or [])
+            if isinstance(response_json.get("output"), list)
+            else None,
+            "choices_count": len(response_json.get("choices") or [])
+            if isinstance(response_json.get("choices"), list)
+            else None,
+        }
+        return truncate_text(json.dumps(shape, ensure_ascii=False), 800)
+    return truncate_text(str(response_json), 800)
 
 
 def image_dimensions(image_bytes: bytes) -> tuple[int, int] | None:
@@ -4465,6 +4499,13 @@ def normalize_image_model(value: Any) -> str:
     raise AppError(f"不支持的生图模型：{cleaned}")
 
 
+def normalize_configured_image_model_id(value: Any) -> str:
+    cleaned = str(value or "").strip()
+    if cleaned == "gpt-image-2-1K":
+        return GPT_IMAGE_2_1K_MODEL_ID
+    return cleaned
+
+
 def image_model_from_settings(settings: Settings) -> str:
     return normalize_image_model(settings.image_model)
 
@@ -4501,7 +4542,8 @@ def supported_nano_banana_aspect_ratios(model_name: str) -> set[str]:
 
 
 def configured_image_model_id(settings: Settings, field_name: str, fallback: str) -> str:
-    return str(getattr(settings, field_name, "") or "").strip() or fallback
+    configured = normalize_configured_image_model_id(getattr(settings, field_name, ""))
+    return configured or fallback
 
 
 def gpt_image_api_base(settings: Settings) -> str:
@@ -4964,7 +5006,7 @@ def resolve_image_size_and_ratio(
 
 
 def create_run_paths(context: AppContext, project_name: str) -> dict[str, Path | str]:
-    now = datetime.now()
+    now = china_now()
     base_run_id = now.strftime("%Y%m%d-%H%M%S-%f")[:-3]
     project_slug = "image"
     project_dir = context.data_dir / project_slug
@@ -5999,7 +6041,11 @@ def save_render_outputs(
     skipped_payload_errors: list[str] = []
     payloads = extract_render_payloads(response_json)
     if not payloads:
-        logger.log(f"render {stem}: 返回里没有解析出图片 payload。")
+        response_summary = summarize_render_response_without_payload(response_json)
+        logger.log(
+            f"render {stem}: 返回里没有解析出图片 payload；"
+            f"响应摘要：{response_summary}；响应日志：{response_file}"
+        )
 
     for offset, payload in enumerate(payloads, start=1):
         suffix = "" if len(payloads) == 1 else f"-{offset}"
@@ -6058,7 +6104,11 @@ def save_render_outputs(
             raise AppError(
                 f"返回里没有保存成功的有效图片。最后一个 payload 错误：{skipped_payload_errors[-1]}"
             )
-        raise AppError("返回里没有解析出有效图片。")
+        raise AppError(
+            "返回里没有解析出有效图片。"
+            f"响应摘要：{summarize_render_response_without_payload(response_json)}；"
+            f"响应日志：{response_file}"
+        )
 
     if skipped_payload_errors:
         logger.log(
@@ -6231,36 +6281,55 @@ def render_prompts(
     reference_prompt_prefix: str = "",
     endpoint_scope: str = "style-replicate",
     upload_gate: threading.Semaphore | None = None,
+    progress_callback: Any | None = None,
+    build_progress_summary: Any | None = None,
 ) -> list[dict[str, Any]]:
-    manifest: list[dict[str, Any]] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = [
-            executor.submit(
-                render_one_prompt,
-                index,
-                prompt_text,
-                settings=settings,
-                run_id=run_id,
-                product_images=product_images,
-                image_api_key=image_api_key,
-                image_key_slot=image_key_slot,
-                output_resolution=output_resolution,
-                output_aspect_ratio=output_aspect_ratio,
-                images_per_prompt=images_per_prompt,
-                output_dir=output_dir,
-                json_dir=json_dir,
-                logger=logger,
-                reference_prompt_prefix=reference_prompt_prefix,
-                endpoint_scope=endpoint_scope,
-                upload_gate=upload_gate,
-            )
-            for index, prompt_text in enumerate(prompts, start=1)
-        ]
-        for future in concurrent.futures.as_completed(futures):
-            manifest.append(future.result())
+    def submit_render(index: int) -> dict[str, Any]:
+        prompt_text = prompts[index - 1]
+        return render_one_prompt(
+            index,
+            prompt_text,
+            settings=settings,
+            run_id=run_id,
+            product_images=product_images,
+            image_api_key=image_api_key,
+            image_key_slot=image_key_slot,
+            output_resolution=output_resolution,
+            output_aspect_ratio=output_aspect_ratio,
+            images_per_prompt=images_per_prompt,
+            output_dir=output_dir,
+            json_dir=json_dir,
+            logger=logger,
+            reference_prompt_prefix=reference_prompt_prefix,
+            endpoint_scope=endpoint_scope,
+            upload_gate=upload_gate,
+        )
 
-    manifest.sort(key=lambda item: item["index"])
-    write_json(json_dir / "manifest.json", manifest)
+    def failed_item(index: int, error_text: str) -> dict[str, Any]:
+        prompt_text = prompts[index - 1] if 0 <= index - 1 < len(prompts) else ""
+        return {
+            "index": index,
+            "prompt": render_reference_prompt(
+                prompt_text,
+                len(product_images),
+                reference_prompt_prefix=reference_prompt_prefix,
+            ),
+            "status": "failed",
+            "error": error_text,
+            "images": [],
+            "image_details": [],
+        }
+
+    manifest = execute_render_batch(
+        request_count=len(prompts),
+        concurrency=concurrency,
+        submit_render=submit_render,
+        manifest_path=json_dir / "manifest.json",
+        logger=logger,
+        progress_callback=progress_callback,
+        build_progress_summary=build_progress_summary,
+        failed_item_factory=failed_item,
+    )
     logger.log(f"渲染完成，manifest 已保存到 {json_dir / 'manifest.json'}")
     return manifest
 
@@ -6501,6 +6570,86 @@ def count_rendered_images(manifest: list[dict[str, Any]]) -> int:
     return sum(len(item.get("images", [])) for item in manifest)
 
 
+def successful_render_items(manifest: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in manifest if item.get("status") != "failed"]
+
+
+def failed_render_items(manifest: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in manifest if item.get("status") == "failed"]
+
+
+def build_render_summary(
+    *,
+    base: dict[str, Any],
+    manifest: list[dict[str, Any]],
+    status: str,
+    request_count: int,
+) -> dict[str, Any]:
+    ordered_manifest = sorted(manifest, key=lambda item: int(item.get("index", 0)))
+    failed_renders = failed_render_items(ordered_manifest)
+    successful_renders = successful_render_items(ordered_manifest)
+    return {
+        **base,
+        "status": status,
+        "request_count": request_count,
+        "completed_request_count": len(successful_renders),
+        "failed_request_count": len(failed_renders),
+        "rendered_image_count": count_rendered_images(successful_renders),
+        "errors": [item.get("error") for item in failed_renders if item.get("error")],
+        "renders": ordered_manifest,
+    }
+
+
+def execute_render_batch(
+    *,
+    request_count: int,
+    concurrency: int,
+    submit_render: Any,
+    manifest_path: Path,
+    logger: AppLogger,
+    progress_callback: Any | None = None,
+    build_progress_summary: Any | None = None,
+    failed_item_factory: Any | None = None,
+) -> list[dict[str, Any]]:
+    manifest: list[dict[str, Any]] = []
+    max_workers = max(1, min(int(concurrency or 1), max(1, int(request_count or 1))))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(submit_render, index): index
+            for index in range(1, request_count + 1)
+        }
+        for future in concurrent.futures.as_completed(futures):
+            index = futures[future]
+            try:
+                manifest.append(future.result())
+            except Exception as exc:
+                error_text = str(exc)
+                logger.log(f"render {index:02d}: 生成失败：{error_text}")
+                if failed_item_factory is not None:
+                    manifest.append(failed_item_factory(index, error_text))
+                else:
+                    manifest.append(
+                        {
+                            "index": index,
+                            "prompt": "",
+                            "status": "failed",
+                            "error": error_text,
+                            "images": [],
+                            "image_details": [],
+                        }
+                    )
+            manifest.sort(key=lambda item: int(item.get("index", 0)))
+            write_json(manifest_path, manifest)
+            if progress_callback is not None and build_progress_summary is not None:
+                try:
+                    progress_callback(build_progress_summary(manifest, "running"))
+                except Exception as exc:
+                    logger.log(f"渲染进度更新失败：{exc}")
+    manifest.sort(key=lambda item: int(item.get("index", 0)))
+    write_json(manifest_path, manifest)
+    return manifest
+
+
 def export_run_zip(run_dir: Path) -> Path:
     zip_path = Path(
         shutil.make_archive(
@@ -6544,7 +6693,7 @@ def run_image_edit_pipeline(
         "conversation_title": options.conversation_title,
         "task_name": "图片生成",
         "run_date": run_paths["run_id"],
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": china_now().isoformat(timespec="seconds"),
         "run_dir": str(run_dir),
         "aspect_ratio": options.output_aspect_ratio,
         "output_resolution": options.output_resolution,
@@ -6607,30 +6756,16 @@ def run_image_edit_pipeline(
         prompt_path.write_text(prompt_text, encoding="utf-8")
 
         def build_summary(current_manifest: list[dict[str, Any]], status: str) -> dict[str, Any]:
-            ordered_manifest = sorted(
-                current_manifest,
-                key=lambda item: int(item.get("index", 0)),
-            )
-            failed_renders = [
-                item for item in ordered_manifest if item.get("status") == "failed"
-            ]
-            successful_renders = [
-                item for item in ordered_manifest if item.get("status") != "failed"
-            ]
-            return {
+            return build_render_summary(
+                base={
                 "project_name": options.project_name,
                 "run_id": run_paths["run_id"],
                 "run_dir": str(run_dir),
                 "task_key": "image-edit",
                 "task_name": "图片生成",
-                "status": status,
                 "created_at": history_base["created_at"],
                 "prompt_count": 1,
-                "request_count": request_count,
-                "completed_request_count": len(successful_renders),
-                "failed_request_count": len(failed_renders),
                 "images_per_request": 1,
-                "rendered_image_count": count_rendered_images(successful_renders),
                 "aspect_ratio": request_config["output_aspect_ratio"],
                 "output_resolution": request_config["output_resolution"],
                 "output_aspect_ratio": request_config["output_aspect_ratio"],
@@ -6643,69 +6778,56 @@ def run_image_edit_pipeline(
                 "render_manifest_file": str(json_dir / "manifest.json"),
                 "debug_log_file": str(json_dir / "run.log"),
                 "input_images": input_meta,
-                "errors": [item.get("error") for item in failed_renders if item.get("error")],
-                "renders": ordered_manifest,
+                },
+                manifest=current_manifest,
+                status=status,
+                request_count=request_count,
+            )
+
+        def submit_render(index: int) -> dict[str, Any]:
+            return render_image_edit(
+                prompt_text=prompt_text,
+                input_images=input_images,
+                settings=settings,
+                image_model=selected_image_model,
+                run_id=str(run_paths["run_id"]),
+                image_api_key=image_api_selection["api_key"],
+                image_key_slot=image_api_selection["key_slot"],
+                output_resolution=request_config["output_resolution"],
+                output_aspect_ratio=request_config["output_aspect_ratio"],
+                images_per_prompt=1,
+                output_dir=images_dir,
+                json_dir=json_dir,
+                logger=run_logger,
+                prompt_index=index,
+                request_file_stem=f"edit-{index:02d}",
+                endpoint_scope="image-edit",
+                label=f"image edit {index:02d}/{request_count}",
+            )
+
+        def failed_item(index: int, error_text: str) -> dict[str, Any]:
+            return {
+                "index": index,
+                "prompt": prompt_text,
+                "status": "failed",
+                "error": error_text,
+                "images": [],
+                "image_details": [],
             }
 
-        def publish_progress() -> None:
-            if progress_callback is None:
-                return
-            try:
-                progress_callback(build_summary(manifest, "running"))
-            except Exception as exc:
-                run_logger.log(f"图片生成进度更新失败：{exc}")
+        manifest = execute_render_batch(
+            request_count=request_count,
+            concurrency=min(request_count, MAX_IMAGE_CONCURRENCY),
+            submit_render=submit_render,
+            manifest_path=json_dir / "manifest.json",
+            logger=run_logger,
+            progress_callback=progress_callback,
+            build_progress_summary=build_summary,
+            failed_item_factory=failed_item,
+        )
 
-        manifest: list[dict[str, Any]] = []
-        max_workers = min(request_count, MAX_IMAGE_CONCURRENCY)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(
-                    render_image_edit,
-                    prompt_text=prompt_text,
-                    input_images=input_images,
-                    settings=settings,
-                    image_model=selected_image_model,
-                    run_id=str(run_paths["run_id"]),
-                    image_api_key=image_api_selection["api_key"],
-                    image_key_slot=image_api_selection["key_slot"],
-                    output_resolution=request_config["output_resolution"],
-                    output_aspect_ratio=request_config["output_aspect_ratio"],
-                    images_per_prompt=1,
-                    output_dir=images_dir,
-                    json_dir=json_dir,
-                    logger=run_logger,
-                    prompt_index=index,
-                    request_file_stem=f"edit-{index:02d}",
-                    endpoint_scope="image-edit",
-                    label=f"image edit {index:02d}/{request_count}",
-                ): index
-                for index in range(1, request_count + 1)
-            }
-            for future in concurrent.futures.as_completed(futures):
-                index = futures[future]
-                try:
-                    manifest.append(future.result())
-                except Exception as exc:
-                    error_text = str(exc)
-                    run_logger.log(f"image edit {index:02d}/{request_count}: 生成失败：{error_text}")
-                    manifest.append(
-                        {
-                            "index": index,
-                            "prompt": prompt_text,
-                            "status": "failed",
-                            "error": error_text,
-                            "images": [],
-                            "image_details": [],
-                        }
-                    )
-                manifest.sort(key=lambda item: int(item.get("index", 0)))
-                write_json(json_dir / "manifest.json", manifest)
-                publish_progress()
-        manifest.sort(key=lambda item: int(item.get("index", 0)))
-        write_json(json_dir / "manifest.json", manifest)
-
-        successful_manifest = [item for item in manifest if item.get("status") != "failed"]
-        failed_manifest = [item for item in manifest if item.get("status") == "failed"]
+        successful_manifest = successful_render_items(manifest)
+        failed_manifest = failed_render_items(manifest)
         if not successful_manifest:
             error_message = (
                 failed_manifest[0].get("error")
@@ -6745,6 +6867,13 @@ def run_image_edit_pipeline(
         return record
     except Exception as exc:
         logger.log(f"图片生成任务失败：{exc}")
+        diagnostics_dir = preserve_failed_run_diagnostics(
+            context,
+            run_dir,
+            label="image-edit",
+        )
+        if diagnostics_dir is not None:
+            logger.log(f"图片生成失败诊断已保留：{diagnostics_dir}")
         cleanup_failed_run_dir(context, run_dir)
         raise
 
@@ -6853,7 +6982,7 @@ def run_image_agent_pipeline(
         "conversation_title": options.conversation_title,
         "task_name": "图片生成 Agent",
         "run_date": run_paths["run_id"],
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": china_now().isoformat(timespec="seconds"),
         "run_dir": str(run_dir),
         "aspect_ratio": request_config["output_aspect_ratio"],
         "output_resolution": request_config["output_resolution"],
@@ -7240,7 +7369,7 @@ def run_color_match_pipeline(
         "task_key": "color-match",
         "task_name": "一键追色",
         "run_date": run_paths["run_id"],
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": china_now().isoformat(timespec="seconds"),
         "run_dir": str(run_dir),
         "aspect_ratio": options.output_aspect_ratio,
         "output_resolution": options.output_resolution,
@@ -7504,6 +7633,7 @@ def run_pipeline(
     settings: Settings,
     options: RunOptions,
     logger: AppLogger,
+    progress_callback: Any | None = None,
 ) -> dict[str, Any]:
     if not settings.llm_api_key or settings.llm_api_key == "replace-me":
         raise AppError("请先在设置页填写有效的大模型 API Key。")
@@ -7523,7 +7653,7 @@ def run_pipeline(
         "project_name": options.project_name,
         "project_slug": run_paths["project_slug"],
         "run_date": run_paths["run_id"],
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": china_now().isoformat(timespec="seconds"),
         "run_dir": str(run_dir),
         "aspect_ratio": options.output_aspect_ratio,
         "output_resolution": options.output_resolution,
@@ -7608,6 +7738,40 @@ def run_pipeline(
             json_dir=json_dir,
             logger=run_logger,
         )
+
+        def build_summary(current_manifest: list[dict[str, Any]], status: str) -> dict[str, Any]:
+            return build_render_summary(
+                base={
+                    "project_name": options.project_name,
+                    "run_id": run_paths["run_id"],
+                    "run_dir": str(run_dir),
+                    "task_key": "style-replicate",
+                    "task_name": "复刻风格图片",
+                    "created_at": history_base["created_at"],
+                    "prompt_count": len(prompts),
+                    "images_per_prompt": options.images_per_prompt,
+                    "images_per_request": options.images_per_prompt,
+                    "aspect_ratio": request_config["output_aspect_ratio"],
+                    "output_resolution": request_config["output_resolution"],
+                    "output_aspect_ratio": request_config["output_aspect_ratio"],
+                    "resolved_size": request_config["size"],
+                    "image_key_slot": image_api_selection["key_slot"],
+                    "image_model": selected_image_model,
+                    "effective_image_model": effective_image_model,
+                    "output_label": request_config["label"],
+                    "prompts_file": str(run_dir / "prompts.txt"),
+                    "prompt_request_file": str(json_dir / "prompt.request.json"),
+                    "prompt_response_file": str(json_dir / "prompt.response.json"),
+                    "render_manifest_file": str(json_dir / "manifest.json"),
+                    "debug_log_file": str(json_dir / "run.log"),
+                    "style_reference_count": len(style_images),
+                    "product_reference_count": len(product_images),
+                },
+                manifest=current_manifest,
+                status=status,
+                request_count=len(prompts),
+            )
+
         manifest = render_prompts(
             prompts,
             settings=settings,
@@ -7622,39 +7786,34 @@ def run_pipeline(
             output_dir=images_dir,
             json_dir=json_dir,
             logger=run_logger,
+            progress_callback=progress_callback,
+            build_progress_summary=build_summary,
         )
 
-        summary = {
-            "project_name": options.project_name,
-            "run_id": run_paths["run_id"],
-            "run_dir": str(run_dir),
-            "created_at": history_base["created_at"],
-            "prompt_count": len(prompts),
-            "rendered_image_count": count_rendered_images(manifest),
-            "aspect_ratio": request_config["output_aspect_ratio"],
-            "output_resolution": request_config["output_resolution"],
-            "output_aspect_ratio": request_config["output_aspect_ratio"],
-            "resolved_size": request_config["size"],
-            "image_key_slot": image_api_selection["key_slot"],
-            "image_model": selected_image_model,
-            "effective_image_model": effective_image_model,
-            "output_label": request_config["label"],
-            "prompts_file": str(run_dir / "prompts.txt"),
-            "prompt_request_file": str(json_dir / "prompt.request.json"),
-            "prompt_response_file": str(json_dir / "prompt.response.json"),
-            "render_manifest_file": str(json_dir / "manifest.json"),
-            "debug_log_file": str(json_dir / "run.log"),
-            "style_reference_count": len(style_images),
-            "product_reference_count": len(product_images),
-            "renders": manifest,
-        }
+        successful_manifest = successful_render_items(manifest)
+        failed_manifest = failed_render_items(manifest)
+        if not successful_manifest:
+            error_message = (
+                failed_manifest[0].get("error")
+                if failed_manifest
+                else "所有复刻渲染请求都失败。"
+            )
+            raise AppError(str(error_message))
+        final_status = "partial" if failed_manifest else "completed"
+        summary = build_summary(manifest, final_status)
+        if failed_manifest:
+            summary["error"] = (
+                f"{len(failed_manifest)} / {len(prompts)} 个复刻渲染请求失败，"
+                f"已保留 {summary['rendered_image_count']} 张成功图片。"
+            )
         summary_path = json_dir / "summary.json"
         write_json(summary_path, summary)
-        run_logger.log(f"任务完成：{summary_path}")
+        run_logger.log(f"任务{('部分完成' if failed_manifest else '完成')}：{summary_path}")
 
         record = {
             **history_base,
-            "status": "completed",
+            "status": final_status,
+            "error": summary.get("error", ""),
             "summary_file": str(summary_path),
             "render_manifest_file": summary["render_manifest_file"],
             "debug_log_file": summary["debug_log_file"],
@@ -7663,10 +7822,11 @@ def run_pipeline(
             "style_sources": style_meta,
             "product_sources": product_meta,
             "rendered_image_count": summary["rendered_image_count"],
+            "failed_request_count": summary["failed_request_count"],
             "image_key_slot": image_api_selection["key_slot"],
             "latest_images": [
                 image_path
-                for item in manifest
+                for item in successful_manifest
                 for image_path in item.get("images", [])
             ][:8],
         }
@@ -7674,6 +7834,13 @@ def run_pipeline(
         return record
     except Exception as exc:
         logger.log(f"任务失败：{exc}")
+        diagnostics_dir = preserve_failed_run_diagnostics(
+            context,
+            run_dir,
+            label="style-replicate",
+        )
+        if diagnostics_dir is not None:
+            logger.log(f"复刻风格图片失败诊断已保留：{diagnostics_dir}")
         cleanup_failed_run_dir(context, run_dir)
         raise
 
@@ -7683,6 +7850,7 @@ def run_style_replicate2_pipeline(
     settings: Settings,
     options: StyleReplicate2Options,
     logger: AppLogger,
+    progress_callback: Any | None = None,
 ) -> dict[str, Any]:
     if not settings.llm_api_key or settings.llm_api_key == "replace-me":
         raise AppError("请先在设置页填写有效的大模型 API Key。")
@@ -7704,7 +7872,7 @@ def run_style_replicate2_pipeline(
         "project_name": options.project_name,
         "project_slug": run_paths["project_slug"],
         "run_date": run_paths["run_id"],
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": china_now().isoformat(timespec="seconds"),
         "run_dir": str(run_dir),
         "aspect_ratio": options.output_aspect_ratio,
         "output_resolution": options.output_resolution,
@@ -7790,6 +7958,49 @@ def run_style_replicate2_pipeline(
                 f"仅限制上传阶段并发为 {STYLE_REPLICATE2_UPLOAD_CONCURRENCY_LIMIT}，"
                 "上传完成后立即释放槽位，生成等待阶段不占用上传槽。"
             )
+
+        def build_summary(current_manifest: list[dict[str, Any]], status: str) -> dict[str, Any]:
+            return build_render_summary(
+                base={
+                    "project_name": options.project_name,
+                    "run_id": run_paths["run_id"],
+                    "run_dir": str(run_dir),
+                    "task_key": "style-replicate-v2",
+                    "task_name": "复刻风格图片2",
+                    "created_at": history_base["created_at"],
+                    "prompt_count": len(prompts),
+                    "images_per_prompt": options.images_per_prompt,
+                    "images_per_request": options.images_per_prompt,
+                    "aspect_ratio": request_config["output_aspect_ratio"],
+                    "output_resolution": request_config["output_resolution"],
+                    "output_aspect_ratio": request_config["output_aspect_ratio"],
+                    "resolved_size": request_config["size"],
+                    "image_key_slot": image_api_selection["key_slot"],
+                    "image_model": selected_image_model,
+                    "effective_image_model": effective_image_model,
+                    "output_label": request_config["label"],
+                    "prompts_file": str(run_dir / "prompts.txt"),
+                    "prompt_request_file": str(json_dir / "prompt.request.json"),
+                    "prompt_response_file": str(json_dir / "prompt.response.json"),
+                    "render_manifest_file": str(json_dir / "manifest.json"),
+                    "debug_log_file": str(json_dir / "run.log"),
+                    "reference_count": len(reference_images),
+                    "style_reference_count": len(reference_images),
+                    "product_reference_count": 0,
+                    "concurrency": options.concurrency,
+                    "upload_gate_enabled": upload_gate is not None,
+                    "upload_gate_reference_threshold": STYLE_REPLICATE2_UPLOAD_GATE_REFERENCE_THRESHOLD,
+                    "upload_concurrency_limit": (
+                        STYLE_REPLICATE2_UPLOAD_CONCURRENCY_LIMIT
+                        if upload_gate is not None
+                        else None
+                    ),
+                },
+                manifest=current_manifest,
+                status=status,
+                request_count=len(prompts),
+            )
+
         manifest = render_prompts(
             prompts,
             settings=settings,
@@ -7807,48 +8018,34 @@ def run_style_replicate2_pipeline(
             reference_prompt_prefix=STYLE_REPLICATE2_RENDER_PROMPT_PREFIX,
             endpoint_scope="style-replicate-v2",
             upload_gate=upload_gate,
+            progress_callback=progress_callback,
+            build_progress_summary=build_summary,
         )
 
-        summary = {
-            "project_name": options.project_name,
-            "run_id": run_paths["run_id"],
-            "run_dir": str(run_dir),
-            "created_at": history_base["created_at"],
-            "prompt_count": len(prompts),
-            "rendered_image_count": count_rendered_images(manifest),
-            "aspect_ratio": request_config["output_aspect_ratio"],
-            "output_resolution": request_config["output_resolution"],
-            "output_aspect_ratio": request_config["output_aspect_ratio"],
-            "resolved_size": request_config["size"],
-            "image_key_slot": image_api_selection["key_slot"],
-            "image_model": selected_image_model,
-            "effective_image_model": effective_image_model,
-            "output_label": request_config["label"],
-            "prompts_file": str(run_dir / "prompts.txt"),
-            "prompt_request_file": str(json_dir / "prompt.request.json"),
-            "prompt_response_file": str(json_dir / "prompt.response.json"),
-            "render_manifest_file": str(json_dir / "manifest.json"),
-            "debug_log_file": str(json_dir / "run.log"),
-            "reference_count": len(reference_images),
-            "style_reference_count": len(reference_images),
-            "product_reference_count": 0,
-            "concurrency": options.concurrency,
-            "upload_gate_enabled": upload_gate is not None,
-            "upload_gate_reference_threshold": STYLE_REPLICATE2_UPLOAD_GATE_REFERENCE_THRESHOLD,
-            "upload_concurrency_limit": (
-                STYLE_REPLICATE2_UPLOAD_CONCURRENCY_LIMIT
-                if upload_gate is not None
-                else None
-            ),
-            "renders": manifest,
-        }
+        successful_manifest = successful_render_items(manifest)
+        failed_manifest = failed_render_items(manifest)
+        if not successful_manifest:
+            error_message = (
+                failed_manifest[0].get("error")
+                if failed_manifest
+                else "所有复刻风格图片2渲染请求都失败。"
+            )
+            raise AppError(str(error_message))
+        final_status = "partial" if failed_manifest else "completed"
+        summary = build_summary(manifest, final_status)
+        if failed_manifest:
+            summary["error"] = (
+                f"{len(failed_manifest)} / {len(prompts)} 个复刻风格图片2渲染请求失败，"
+                f"已保留 {summary['rendered_image_count']} 张成功图片。"
+            )
         summary_path = json_dir / "summary.json"
         write_json(summary_path, summary)
-        run_logger.log(f"复刻风格图片2任务完成：{summary_path}")
+        run_logger.log(f"复刻风格图片2任务{('部分完成' if failed_manifest else '完成')}：{summary_path}")
 
         record = {
             **history_base,
-            "status": "completed",
+            "status": final_status,
+            "error": summary.get("error", ""),
             "summary_file": str(summary_path),
             "render_manifest_file": summary["render_manifest_file"],
             "debug_log_file": summary["debug_log_file"],
@@ -7859,10 +8056,11 @@ def run_style_replicate2_pipeline(
             "product_source": {},
             "product_sources": [],
             "rendered_image_count": summary["rendered_image_count"],
+            "failed_request_count": summary["failed_request_count"],
             "image_key_slot": image_api_selection["key_slot"],
             "latest_images": [
                 image_path
-                for item in manifest
+                for item in successful_manifest
                 for image_path in item.get("images", [])
             ][:8],
         }
@@ -7870,6 +8068,13 @@ def run_style_replicate2_pipeline(
         return record
     except Exception as exc:
         logger.log(f"复刻风格图片2任务失败：{exc}")
+        diagnostics_dir = preserve_failed_run_diagnostics(
+            context,
+            run_dir,
+            label="style-replicate-v2",
+        )
+        if diagnostics_dir is not None:
+            logger.log(f"复刻风格图片2失败诊断已保留：{diagnostics_dir}")
         cleanup_failed_run_dir(context, run_dir)
         raise
 

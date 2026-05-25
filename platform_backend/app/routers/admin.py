@@ -7,7 +7,11 @@ from pydantic import BaseModel, Field
 
 from ..auth import public_user, require_admin, require_csrf_user
 from ..database import connect, new_id, row_to_dict, transaction
-from ..legacy_contract import collect_job_log_entries
+from ..legacy_contract import (
+    ADMIN_LOG_LINE_LIMIT,
+    collect_global_log_entries,
+    collect_job_log_entries,
+)
 from ..security import hash_password, make_temporary_password, utc_now
 from ..settings_service import get_admin_global_settings, save_global_settings
 from ..storage_service import delete_user_storage, storage_used_by_user
@@ -288,13 +292,31 @@ def admin_jobs(user: dict = Depends(require_csrf_user)) -> dict:
     return {"data": list_jobs(limit=200)}
 
 
+@router.get("/logs")
+def admin_logs(
+    target_user_id: str | None = None,
+    limit: int = Query(default=ADMIN_LOG_LINE_LIMIT, ge=1, le=ADMIN_LOG_LINE_LIMIT),
+    user: dict = Depends(require_csrf_user),
+) -> dict:
+    _admin(user)
+    return collect_global_log_entries(
+        user_id=target_user_id,
+        limit=limit,
+        include_audit=True,
+    )
+
+
 @router.get("/jobs/{job_id}/logs")
-def admin_job_logs(job_id: str, user: dict = Depends(require_csrf_user)) -> dict:
+def admin_job_logs(
+    job_id: str,
+    limit: int = Query(default=ADMIN_LOG_LINE_LIMIT, ge=1, le=ADMIN_LOG_LINE_LIMIT),
+    user: dict = Depends(require_csrf_user),
+) -> dict:
     _admin(user)
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在。")
-    return collect_job_log_entries(job)
+    return collect_job_log_entries(job, max_lines=limit)
 
 
 @router.get("/settings")

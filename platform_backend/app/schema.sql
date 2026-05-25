@@ -112,6 +112,21 @@ CREATE TABLE IF NOT EXISTS job_events (
   created_at TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_job_events_user_created ON job_events(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_job_events_job_created ON job_events(job_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS client_logs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  level TEXT NOT NULL DEFAULT 'error',
+  message TEXT NOT NULL,
+  details_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_client_logs_user_created ON client_logs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_client_logs_created ON client_logs(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS job_artifacts (
   id TEXT PRIMARY KEY,
   job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -160,3 +175,5 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   details_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);

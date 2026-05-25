@@ -46,6 +46,7 @@ class PlatformConfig:
     bootstrap_admin_password: str = _env("PLATFORM_ADMIN_PASSWORD", "admin123456")
     max_upload_mb: int = int(_env("PLATFORM_MAX_UPLOAD_MB", "80"))
     history_retention_days: int = int(_env("PLATFORM_HISTORY_RETENTION_DAYS", "10"))
+    log_retention_days: int = int(_env("PLATFORM_LOG_RETENTION_DAYS", "5"))
     history_cleanup_interval_hours: int = int(
         _env("PLATFORM_HISTORY_CLEANUP_INTERVAL_HOURS", "24")
     )

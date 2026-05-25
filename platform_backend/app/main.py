@@ -12,7 +12,7 @@ from .auth import require_active_user, require_admin
 from .config import CONFIG
 from .database import init_db
 from .download_service import cleanup_old_downloads
-from .task_service import cleanup_expired_job_history
+from .task_service import cleanup_expired_job_history, cleanup_expired_logs
 from .routers import admin, auth, legacy_web, me, tasks
 
 
@@ -50,6 +50,7 @@ def create_app() -> FastAPI:
         init_db()
         cleanup_old_downloads()
         cleanup_expired_job_history(retention_days=CONFIG.history_retention_days)
+        cleanup_expired_logs(retention_days=CONFIG.log_retention_days)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):

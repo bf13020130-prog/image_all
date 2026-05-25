@@ -620,7 +620,7 @@
         </section>
 
         <section class="page-view" data-view="settings">
-          <form id="settingsForm" class="page-section-stack">
+          <form id="settingsForm" class="page-section-stack" autocomplete="off">
             <article class="page-card page-card--dark settings-main-card">
               <div class="section-heading section-heading--split">
                 <div>
@@ -644,12 +644,12 @@
 
                   <label class="field">
                     <span>API Base</span>
-                    <input type="text" name="llm_api_base" />
+                    <input type="text" name="llm_api_base" autocomplete="off" />
                   </label>
 
                   <label class="field">
                     <span>API Key</span>
-                    <input type="password" name="llm_api_key" />
+                    <input type="password" name="llm_api_key" autocomplete="new-password" />
                   </label>
 
                   <label class="field">
@@ -663,12 +663,12 @@
 
                   <label class="field">
                     <span>API Base</span>
-                    <input type="text" name="color_match_api_base" />
+                    <input type="text" name="color_match_api_base" autocomplete="off" />
                   </label>
 
                   <label class="field">
                     <span>API Key</span>
-                    <input type="password" name="color_match_api_key" />
+                    <input type="password" name="color_match_api_key" autocomplete="new-password" />
                   </label>
 
                   <label class="field">
@@ -682,12 +682,12 @@
 
                   <label class="field">
                     <span>API Base</span>
-                    <input type="text" name="image_agent_api_base" />
+                    <input type="text" name="image_agent_api_base" autocomplete="off" />
                   </label>
 
                   <label class="field">
                     <span>API Key</span>
-                    <input type="password" name="image_agent_api_key" />
+                    <input type="password" name="image_agent_api_key" autocomplete="new-password" />
                   </label>
 
                   <label class="field">
@@ -766,12 +766,12 @@
 
                   <label class="field">
                     <span>API Base</span>
-                    <input type="text" name="gpt_image_1k_api_base" />
+                    <input type="text" name="gpt_image_1k_api_base" autocomplete="off" />
                   </label>
 
                   <label class="field">
                     <span>API Key</span>
-                    <input type="password" name="gpt_image_1k_api_key" />
+                    <input type="password" name="gpt_image_1k_api_key" autocomplete="new-password" />
                   </label>
 
                   <label class="field">
@@ -785,12 +785,12 @@
 
                   <label class="field">
                     <span>API Base</span>
-                    <input type="text" name="gpt_image_api_base" />
+                    <input type="text" name="gpt_image_api_base" autocomplete="off" />
                   </label>
 
                   <label class="field">
                     <span>API Key</span>
-                    <input type="password" name="gpt_image_api_key" />
+                    <input type="password" name="gpt_image_api_key" autocomplete="new-password" />
                   </label>
 
                   <label class="field">
@@ -804,12 +804,12 @@
 
                   <label class="field">
                     <span>API Base</span>
-                    <input type="text" name="gemini_image_api_base" />
+                    <input type="text" name="gemini_image_api_base" autocomplete="off" />
                   </label>
 
                   <label class="field">
                     <span>API Key</span>
-                    <input type="password" name="gemini_image_api_key" />
+                    <input type="password" name="gemini_image_api_key" autocomplete="new-password" />
                   </label>
                 </fieldset>
 
@@ -921,6 +921,8 @@
             <h2 id="logModalTitle">日志</h2>
           </div>
           <div class="modal-actions">
+            <button class="secondary-action" type="button" id="openGlobalLogsButton">总日志</button>
+            <button class="secondary-action" type="button" id="openCurrentJobLogsButton">当前任务日志</button>
             <button class="secondary-action" type="button" id="refreshLogsButton">刷新</button>
             <button class="secondary-action" type="button" id="openLogsFolderButton">
               打开日志目录

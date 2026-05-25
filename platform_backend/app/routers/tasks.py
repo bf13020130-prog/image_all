@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from ..auth import require_active_user, require_csrf_user
 from ..database import json_loads
+from ..legacy_contract import with_china_time_fields
 from ..storage_service import save_uploads
 from ..task_service import (
     create_job,
@@ -37,7 +38,8 @@ def get_one_job(job_id: str, user: dict = Depends(require_active_user)) -> dict:
 def get_events(job_id: str, user: dict = Depends(require_active_user)) -> dict:
     if not get_job(job_id, user_id=user["id"]):
         raise HTTPException(status_code=404, detail="任务不存在。")
-    return {"data": list_job_events(job_id, user_id=user["id"])}
+    events = list_job_events(job_id, user_id=user["id"])
+    return {"data": [with_china_time_fields(item, "created_at") for item in events]}
 
 
 @router.post("/tasks/{task_type}")
