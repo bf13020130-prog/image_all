@@ -3784,6 +3784,7 @@ async function submitImageEditRequest({
   sourceMessageId = "",
 }) {
   let message = null;
+  let didClearComposer = false;
   const isAgent = mode === "agent";
   const messageOutputResolution = isAgent ? "agent" : outputResolution;
   const messageOutputAspectRatio = isAgent ? "agent" : outputAspectRatio;
@@ -3835,6 +3836,12 @@ async function submitImageEditRequest({
     saveEditConversations();
 
     const conversationTitle = conversation.title || "图片生成";
+    if (clearComposerOnSuccess) {
+      clearEditComposer({ render: false });
+      didClearComposer = true;
+      renderEditPreview();
+    }
+
     const formData = new FormData();
     formData.set("prompt", prompt);
     formData.set("image_model", imageModel);
@@ -3866,7 +3873,7 @@ async function submitImageEditRequest({
       message.agentSummary = payload.summary.agent;
     }
     saveEditConversations();
-    if (clearComposerOnSuccess) {
+    if (clearComposerOnSuccess && !didClearComposer) {
       clearEditComposer({ render: false });
     }
     renderEditWorkspace();

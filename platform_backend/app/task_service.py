@@ -166,6 +166,38 @@ def update_job_payload(job_id: str, payload: dict[str, Any]) -> None:
         )
 
 
+def update_running_job_result(
+    *,
+    job_id: str,
+    user_id: str,
+    result: dict[str, Any],
+    progress: int | None = None,
+) -> None:
+    now = utc_now()
+    safe_progress = None
+    if progress is not None:
+        safe_progress = max(5, min(99, int(progress)))
+    with transaction() as conn:
+        if safe_progress is None:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET result_json = ?, updated_at = ?
+                WHERE id = ? AND user_id = ? AND status = 'running'
+                """,
+                (json_dumps(result), now, job_id, user_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET result_json = ?, progress = ?, updated_at = ?
+                WHERE id = ? AND user_id = ? AND status = 'running'
+                """,
+                (json_dumps(result), safe_progress, now, job_id, user_id),
+            )
+
+
 def get_user_quota(user_id: str) -> dict[str, Any]:
     with connect() as conn:
         row = conn.execute(

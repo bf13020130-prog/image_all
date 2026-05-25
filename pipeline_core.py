@@ -267,6 +267,7 @@ OUTPUT_PRESET_LABELS = {
     "9:16": "9:16 · 自动竖版",
 }
 MAX_IMAGE_CONCURRENCY = 200
+_external_request_slot_state = threading.local()
 
 
 class SharedRenderGate:
@@ -892,11 +893,25 @@ def shared_render_slot() -> Any:
 @contextmanager
 def external_request_slot(label: str, logger: "AppLogger") -> Any:
     factory = getattr(logger, "request_slot_factory", None)
+    active_depth = int(
+        getattr(_external_request_slot_state, "active_depth", 0) or 0
+    )
+    if active_depth > 0:
+        _external_request_slot_state.active_depth = active_depth + 1
+        try:
+            yield
+        finally:
+            _external_request_slot_state.active_depth = active_depth
+        return
     if factory is None:
         yield
         return
     with factory(label):
-        yield
+        _external_request_slot_state.active_depth = 1
+        try:
+            yield
+        finally:
+            _external_request_slot_state.active_depth = 0
 
 
 @dataclass
@@ -6138,62 +6153,64 @@ def render_one_prompt(
     )
     request_path = json_dir / f"{prompt_index:02d}.request.json"
     response_path = json_dir / f"{prompt_index:02d}.response.json"
-    with shared_render_slot():
-        if is_nano_banana_model(selected_image_model):
-            request_payload = build_gemini_image_payload(
-                prompt_text=render_prompt_text,
-                input_images=product_images,
-                request_config=request_config,
-            )
-            response_json = request_json(
-                gemini_image_endpoint(settings, effective_image_model),
-                request_payload,
-                api_key=image_api_key,
-                idempotency_key=idempotency_key,
-                connect_timeout_seconds=settings.image_connect_timeout_seconds,
-                read_timeout_seconds=settings.image_read_timeout_seconds,
-                retry_count=settings.image_retry_count,
-                logger=logger,
-                label=f"render {prompt_index:02d}",
-                request_log_path=request_path,
-                response_log_path=response_path,
-                log_payload=redact_gemini_image_payload(request_payload),
-                upload_gate=upload_gate,
-                use_system_proxy=settings.use_system_proxy,
-            )
-        else:
-            fields, _ = build_image_request_fields(
-                prompt_text=render_prompt_text,
-                settings=settings,
-                image_model=selected_image_model,
-                request_config=request_config,
-                include_count=images_per_prompt,
-            )
-            response_json = request_multipart_json(
-                f"{gpt_image_request_api_base(settings, request_config['output_resolution'])}/v1/images/edits",
-                fields,
-                file_parts=[("image", product_image) for product_image in product_images],
-                api_key=image_api_key,
-                idempotency_key=idempotency_key,
-                connect_timeout_seconds=settings.image_connect_timeout_seconds,
-                read_timeout_seconds=settings.image_read_timeout_seconds,
-                retry_count=settings.image_retry_count,
-                logger=logger,
-                label=f"render {prompt_index:02d}",
-                request_log_path=request_path,
-                response_log_path=response_path,
-                upload_gate=upload_gate,
-                use_system_proxy=settings.use_system_proxy,
-            )
-        return save_render_outputs(
-            response_json,
-            output_dir=output_dir,
-            prompt_index=prompt_index,
-            prompt_text=render_prompt_text,
-            settings=settings,
-            logger=logger,
-            response_file=response_path,
-        )
+    request_label = f"render {prompt_index:02d}"
+    with external_request_slot(request_label, logger):
+        with shared_render_slot():
+            if is_nano_banana_model(selected_image_model):
+                request_payload = build_gemini_image_payload(
+                    prompt_text=render_prompt_text,
+                    input_images=product_images,
+                    request_config=request_config,
+                )
+                response_json = request_json(
+                    gemini_image_endpoint(settings, effective_image_model),
+                    request_payload,
+                    api_key=image_api_key,
+                    idempotency_key=idempotency_key,
+                    connect_timeout_seconds=settings.image_connect_timeout_seconds,
+                    read_timeout_seconds=settings.image_read_timeout_seconds,
+                    retry_count=settings.image_retry_count,
+                    logger=logger,
+                    label=request_label,
+                    request_log_path=request_path,
+                    response_log_path=response_path,
+                    log_payload=redact_gemini_image_payload(request_payload),
+                    upload_gate=upload_gate,
+                    use_system_proxy=settings.use_system_proxy,
+                )
+            else:
+                fields, _ = build_image_request_fields(
+                    prompt_text=render_prompt_text,
+                    settings=settings,
+                    image_model=selected_image_model,
+                    request_config=request_config,
+                    include_count=images_per_prompt,
+                )
+                response_json = request_multipart_json(
+                    f"{gpt_image_request_api_base(settings, request_config['output_resolution'])}/v1/images/edits",
+                    fields,
+                    file_parts=[("image", product_image) for product_image in product_images],
+                    api_key=image_api_key,
+                    idempotency_key=idempotency_key,
+                    connect_timeout_seconds=settings.image_connect_timeout_seconds,
+                    read_timeout_seconds=settings.image_read_timeout_seconds,
+                    retry_count=settings.image_retry_count,
+                    logger=logger,
+                    label=request_label,
+                    request_log_path=request_path,
+                    response_log_path=response_path,
+                    upload_gate=upload_gate,
+                    use_system_proxy=settings.use_system_proxy,
+                )
+    return save_render_outputs(
+        response_json,
+        output_dir=output_dir,
+        prompt_index=prompt_index,
+        prompt_text=render_prompt_text,
+        settings=settings,
+        logger=logger,
+        response_file=response_path,
+    )
 
 
 def render_prompts(
@@ -6372,111 +6389,112 @@ def render_image_edit(
         resolved_endpoint_scope,
         f"{prompt_index:02d}",
     )
-    with shared_render_slot():
-        if is_nano_banana_model(selected_image_model):
-            request_payload = build_gemini_image_payload(
-                prompt_text=prompt_text,
-                input_images=input_images,
-                request_config=request_config,
-            )
-            endpoint_url = gemini_image_endpoint(settings, effective_image_model)
-            logger.log(
-                f"{label}: "
-                f"endpoint={urllib.parse.urlparse(endpoint_url).path}, model={effective_image_model}, images={len(input_images)}, "
-                f"resolution={request_config['output_resolution']}, "
-                f"ratio={request_config['output_aspect_ratio']}, "
-                f"image_size={gemini_image_size(request_config['output_resolution'])}, "
-                f"key_slot={image_key_slot}, "
-                f"idempotency_key={idempotency_key}"
-            )
-            response_json = request_json(
-                endpoint_url,
-                request_payload,
-                api_key=image_api_key,
-                idempotency_key=idempotency_key,
-                connect_timeout_seconds=settings.image_connect_timeout_seconds,
-                read_timeout_seconds=settings.image_read_timeout_seconds,
-                retry_count=settings.image_retry_count,
-                logger=logger,
-                label=label,
-                request_log_path=request_path,
-                response_log_path=response_path,
-                log_payload=redact_gemini_image_payload(request_payload),
-                use_system_proxy=settings.use_system_proxy,
-            )
-        elif use_multipart_edit_endpoint:
-            request_fields, _ = build_image_request_fields(
-                prompt_text=prompt_text,
-                settings=settings,
-                image_model=selected_image_model,
-                request_config=request_config,
-                include_count=1,
-            )
-            logger.log(
-                f"{label}: "
-                f"endpoint=/v1/images/edits, model={effective_image_model}, images={len(input_images)}, "
-                f"resolution={request_config['output_resolution']}, "
-                f"ratio={request_config['output_aspect_ratio']}, "
-                f"size={request_config['size']}, "
-                f"key_slot={image_key_slot}, "
-                f"idempotency_key={idempotency_key}"
-            )
-            response_json = request_multipart_json(
-                f"{gpt_image_request_api_base(settings, request_config['output_resolution'])}/v1/images/edits",
-                request_fields,
-                file_parts=[("image", image_path) for image_path in input_images],
-                api_key=image_api_key,
-                idempotency_key=idempotency_key,
-                connect_timeout_seconds=settings.image_connect_timeout_seconds,
-                read_timeout_seconds=settings.image_read_timeout_seconds,
-                retry_count=settings.image_retry_count,
-                logger=logger,
-                label=label,
-                request_log_path=request_path,
-                response_log_path=response_path,
-                use_system_proxy=settings.use_system_proxy,
-            )
-        else:
-            request_fields, _ = build_image_request_fields(
-                prompt_text=prompt_text,
-                settings=settings,
-                image_model=selected_image_model,
-                request_config=request_config,
-                include_count=1,
-            )
-            request_payload = dict(request_fields)
-            logger.log(
-                f"{label}: "
-                f"endpoint=/v1/images/generations, model={effective_image_model}, "
-                f"resolution={request_config['output_resolution']}, "
-                f"ratio={request_config['output_aspect_ratio']}, "
-                f"size={request_config['size']}, "
-                f"key_slot={image_key_slot}, "
-                f"idempotency_key={idempotency_key}"
-            )
-            response_json = request_json(
-                f"{gpt_image_request_api_base(settings, request_config['output_resolution'])}/v1/images/generations",
-                request_payload,
-                api_key=image_api_key,
-                idempotency_key=idempotency_key,
-                connect_timeout_seconds=settings.image_connect_timeout_seconds,
-                read_timeout_seconds=settings.image_read_timeout_seconds,
-                retry_count=settings.image_retry_count,
-                logger=logger,
-                label=label,
-                request_log_path=request_path,
-                response_log_path=response_path,
-                use_system_proxy=settings.use_system_proxy,
-            )
-        return save_render_outputs(
-            response_json,
-            output_dir=output_dir,
-            prompt_index=prompt_index,
-            prompt_text=prompt_text,
-            settings=settings,
-            logger=logger,
-            response_file=response_path,
-        )
+    with external_request_slot(label, logger):
+        with shared_render_slot():
+            if is_nano_banana_model(selected_image_model):
+                request_payload = build_gemini_image_payload(
+                    prompt_text=prompt_text,
+                    input_images=input_images,
+                    request_config=request_config,
+                )
+                endpoint_url = gemini_image_endpoint(settings, effective_image_model)
+                logger.log(
+                    f"{label}: "
+                    f"endpoint={urllib.parse.urlparse(endpoint_url).path}, model={effective_image_model}, images={len(input_images)}, "
+                    f"resolution={request_config['output_resolution']}, "
+                    f"ratio={request_config['output_aspect_ratio']}, "
+                    f"image_size={gemini_image_size(request_config['output_resolution'])}, "
+                    f"key_slot={image_key_slot}, "
+                    f"idempotency_key={idempotency_key}"
+                )
+                response_json = request_json(
+                    endpoint_url,
+                    request_payload,
+                    api_key=image_api_key,
+                    idempotency_key=idempotency_key,
+                    connect_timeout_seconds=settings.image_connect_timeout_seconds,
+                    read_timeout_seconds=settings.image_read_timeout_seconds,
+                    retry_count=settings.image_retry_count,
+                    logger=logger,
+                    label=label,
+                    request_log_path=request_path,
+                    response_log_path=response_path,
+                    log_payload=redact_gemini_image_payload(request_payload),
+                    use_system_proxy=settings.use_system_proxy,
+                )
+            elif use_multipart_edit_endpoint:
+                request_fields, _ = build_image_request_fields(
+                    prompt_text=prompt_text,
+                    settings=settings,
+                    image_model=selected_image_model,
+                    request_config=request_config,
+                    include_count=1,
+                )
+                logger.log(
+                    f"{label}: "
+                    f"endpoint=/v1/images/edits, model={effective_image_model}, images={len(input_images)}, "
+                    f"resolution={request_config['output_resolution']}, "
+                    f"ratio={request_config['output_aspect_ratio']}, "
+                    f"size={request_config['size']}, "
+                    f"key_slot={image_key_slot}, "
+                    f"idempotency_key={idempotency_key}"
+                )
+                response_json = request_multipart_json(
+                    f"{gpt_image_request_api_base(settings, request_config['output_resolution'])}/v1/images/edits",
+                    request_fields,
+                    file_parts=[("image", image_path) for image_path in input_images],
+                    api_key=image_api_key,
+                    idempotency_key=idempotency_key,
+                    connect_timeout_seconds=settings.image_connect_timeout_seconds,
+                    read_timeout_seconds=settings.image_read_timeout_seconds,
+                    retry_count=settings.image_retry_count,
+                    logger=logger,
+                    label=label,
+                    request_log_path=request_path,
+                    response_log_path=response_path,
+                    use_system_proxy=settings.use_system_proxy,
+                )
+            else:
+                request_fields, _ = build_image_request_fields(
+                    prompt_text=prompt_text,
+                    settings=settings,
+                    image_model=selected_image_model,
+                    request_config=request_config,
+                    include_count=1,
+                )
+                request_payload = dict(request_fields)
+                logger.log(
+                    f"{label}: "
+                    f"endpoint=/v1/images/generations, model={effective_image_model}, "
+                    f"resolution={request_config['output_resolution']}, "
+                    f"ratio={request_config['output_aspect_ratio']}, "
+                    f"size={request_config['size']}, "
+                    f"key_slot={image_key_slot}, "
+                    f"idempotency_key={idempotency_key}"
+                )
+                response_json = request_json(
+                    f"{gpt_image_request_api_base(settings, request_config['output_resolution'])}/v1/images/generations",
+                    request_payload,
+                    api_key=image_api_key,
+                    idempotency_key=idempotency_key,
+                    connect_timeout_seconds=settings.image_connect_timeout_seconds,
+                    read_timeout_seconds=settings.image_read_timeout_seconds,
+                    retry_count=settings.image_retry_count,
+                    logger=logger,
+                    label=label,
+                    request_log_path=request_path,
+                    response_log_path=response_path,
+                    use_system_proxy=settings.use_system_proxy,
+                )
+    return save_render_outputs(
+        response_json,
+        output_dir=output_dir,
+        prompt_index=prompt_index,
+        prompt_text=prompt_text,
+        settings=settings,
+        logger=logger,
+        response_file=response_path,
+    )
 
 
 def count_rendered_images(manifest: list[dict[str, Any]]) -> int:

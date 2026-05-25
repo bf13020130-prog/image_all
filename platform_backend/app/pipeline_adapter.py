@@ -8,7 +8,12 @@ from typing import Any
 import pipeline_core as pipeline_app
 
 from .storage_service import job_storage_dir, register_artifact
-from .task_service import add_job_event, allocate_user_image_sequence, request_slot
+from .task_service import (
+    add_job_event,
+    allocate_user_image_sequence,
+    request_slot,
+    update_running_job_result,
+)
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
@@ -337,7 +342,10 @@ def _create_job_event_logger(job: dict[str, Any]):
 
 
 def _progress_callback(job: dict[str, Any]):
+    last_persist_signature = ""
+
     def update_progress(summary: dict[str, Any]) -> None:
+        nonlocal last_persist_signature
         if not isinstance(summary, dict):
             return
         completed = int(summary.get("completed_request_count") or 0)
@@ -363,6 +371,32 @@ def _progress_callback(job: dict[str, Any]):
             message="，".join(parts),
             level="warning" if failed else "info",
         )
+
+        if not total or completed + failed <= 0:
+            return
+        progress = int(((completed + failed) / max(1, total)) * 95)
+        progress = max(5, min(99, progress))
+        signature = f"{completed}:{failed}:{rendered}:{progress}"
+        if signature == last_persist_signature:
+            return
+        last_persist_signature = signature
+        running_summary = {
+            **summary,
+            "status": "running",
+            "phase": phase or "running",
+        }
+        try:
+            update_running_job_result(
+                job_id=job["id"],
+                user_id=job["user_id"],
+                result={
+                    "summary": running_summary,
+                    "artifacts": [],
+                },
+                progress=progress,
+            )
+        except Exception:
+            pass
 
     return update_progress
 
