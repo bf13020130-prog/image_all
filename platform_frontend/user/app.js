@@ -101,8 +101,6 @@ const state = {
   platformUser: null,
 };
 
-const EDIT_CONVERSATIONS_STORAGE_KEY = "imagReplicate2.imageEditConversations";
-const DELETED_EDIT_CONVERSATIONS_STORAGE_KEY = "imagReplicate2.deletedImageEditConversationIds";
 const EDIT_STREAM_BOTTOM_THRESHOLD = 40;
 const AGENT_CONTEXT_MAX_MESSAGES = 80;
 const AGENT_CONTEXT_MAX_RESULT_URLS = 8;
@@ -137,6 +135,20 @@ const NANO_BANANA_2_ONLY_ASPECT_RATIOS = new Set(["1:4", "4:1", "1:8", "8:1"]);
 const POLL_INTERVAL_MS = 2200;
 
 const refs = {};
+
+function currentUserStorageToken() {
+  const user = state.platformUser || {};
+  const raw = user.id || user.username || "anonymous";
+  return String(raw || "anonymous").replace(/[^a-zA-Z0-9_-]+/g, "_");
+}
+
+function editConversationsStorageKey() {
+  return `imagReplicate2.user.${currentUserStorageToken()}.imageEditConversations`;
+}
+
+function deletedEditConversationsStorageKey() {
+  return `imagReplicate2.user.${currentUserStorageToken()}.deletedImageEditConversationIds`;
+}
 
 document.addEventListener("DOMContentLoaded", () => {
   void initializePlatformApp();
@@ -769,7 +781,7 @@ function bindEvents() {
   });
 
   window.addEventListener("beforeunload", () => {
-    persistEditConversationsImmediately({ useBeacon: true });
+    persistEditConversationsImmediately({ keepalive: true });
     revokePreviewUrl("style");
     revokePreviewUrl("product");
     revokePreviewUrl("style2");
@@ -1086,7 +1098,7 @@ function renderTaskBoardFor({ board, taskKey, statuses = null, emptyText }) {
 
 function loadDeletedEditConversationIds() {
   try {
-    const raw = window.localStorage.getItem(DELETED_EDIT_CONVERSATIONS_STORAGE_KEY);
+    const raw = window.localStorage.getItem(deletedEditConversationsStorageKey());
     const parsed = raw ? JSON.parse(raw) : [];
     state.deletedEditConversationIds = new Set(
       Array.isArray(parsed)
@@ -1102,11 +1114,11 @@ function saveDeletedEditConversationIds() {
   const ids = Array.from(state.deletedEditConversationIds || []);
   if (ids.length) {
     window.localStorage.setItem(
-      DELETED_EDIT_CONVERSATIONS_STORAGE_KEY,
+      deletedEditConversationsStorageKey(),
       JSON.stringify(ids.slice(-120))
     );
   } else {
-    window.localStorage.removeItem(DELETED_EDIT_CONVERSATIONS_STORAGE_KEY);
+    window.localStorage.removeItem(deletedEditConversationsStorageKey());
   }
 }
 
@@ -1840,10 +1852,11 @@ function hydrateEditConversationTextRepliesFromHistory(records = []) {
 }
 
 function loadEditConversations(seedConversations = null) {
-  let candidate = seedConversations;
-  if (!Array.isArray(candidate) || candidate.length === 0) {
+  const hasServerSeed = Array.isArray(seedConversations);
+  let candidate = hasServerSeed ? seedConversations : [];
+  if (!hasServerSeed) {
     try {
-      const raw = window.localStorage.getItem(EDIT_CONVERSATIONS_STORAGE_KEY);
+      const raw = window.localStorage.getItem(editConversationsStorageKey());
       candidate = raw ? JSON.parse(raw) : [];
     } catch (_error) {
       candidate = [];
@@ -1853,14 +1866,11 @@ function loadEditConversations(seedConversations = null) {
   state.editConversations = normalizePersistedEditConversations(candidate);
   if (state.editConversations.length) {
     window.localStorage.setItem(
-      EDIT_CONVERSATIONS_STORAGE_KEY,
+      editConversationsStorageKey(),
       JSON.stringify(serializeEditConversations())
     );
-    if (Array.isArray(seedConversations) && seedConversations.length === 0) {
-      void persistEditConversations(serializeEditConversations());
-    }
   } else {
-    window.localStorage.removeItem(EDIT_CONVERSATIONS_STORAGE_KEY);
+    window.localStorage.removeItem(editConversationsStorageKey());
   }
 }
 
@@ -1878,7 +1888,7 @@ async function persistEditConversations(payload) {
   }
 }
 
-function persistEditConversationsImmediately({ useBeacon = false } = {}) {
+function persistEditConversationsImmediately({ keepalive = false } = {}) {
   const payload = state.editConversationPersistPayload ?? serializeEditConversations();
   if (state.editConversationPersistTimer) {
     window.clearTimeout(state.editConversationPersistTimer);
@@ -1886,13 +1896,22 @@ function persistEditConversationsImmediately({ useBeacon = false } = {}) {
   }
   state.editConversationPersistPayload = payload;
 
-  if (useBeacon && navigator.sendBeacon) {
-    const body = new Blob([JSON.stringify({ conversations: payload })], {
-      type: "application/json",
-    });
-    if (navigator.sendBeacon(toApiUrl("/api/edit-conversations"), body)) {
-      return;
+  if (keepalive) {
+    const headers = {
+      "Content-Type": "application/json",
+      "X-Platform-Client": "user",
+    };
+    if (state.platformCsrfToken) {
+      headers["X-CSRF-Token"] = state.platformCsrfToken;
     }
+    void fetch(toApiUrl("/api/edit-conversations"), {
+      method: "PUT",
+      headers,
+      credentials: "same-origin",
+      body: JSON.stringify({ conversations: payload }),
+      keepalive: true,
+    });
+    return;
   }
 
   void persistEditConversations(payload);
@@ -1913,11 +1932,11 @@ function saveEditConversations() {
   const serializable = serializeEditConversations();
   if (serializable.length) {
     window.localStorage.setItem(
-      EDIT_CONVERSATIONS_STORAGE_KEY,
+      editConversationsStorageKey(),
       JSON.stringify(serializable)
     );
   } else {
-    window.localStorage.removeItem(EDIT_CONVERSATIONS_STORAGE_KEY);
+    window.localStorage.removeItem(editConversationsStorageKey());
   }
   state.editConversationPersistPayload = serializable;
   persistEditConversationsImmediately();
@@ -2071,10 +2090,7 @@ async function deleteEditConversation(conversationId) {
   if (!state.editConversations.length) {
     createEditConversation({ persist: false, render: false });
   }
-  window.localStorage.setItem(
-    EDIT_CONVERSATIONS_STORAGE_KEY,
-    JSON.stringify(serializeEditConversations())
-  );
+  saveEditConversations();
   renderHistory();
   renderTaskBoard();
   renderEditWorkspace();

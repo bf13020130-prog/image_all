@@ -8,7 +8,7 @@ from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadF
 from fastapi.responses import FileResponse
 
 from ..auth import require_active_user, require_csrf_user
-from ..database import transaction
+from ..database import connect, json_dumps, json_loads, transaction
 from ..download_service import build_job_zip, collect_job_download_files
 from ..legacy_contract import collect_job_log_entries, serialize_job as serialize_legacy_job
 from ..settings_service import (
@@ -18,6 +18,7 @@ from ..settings_service import (
     save_user_secrets,
     save_user_settings,
 )
+from ..security import utc_now
 from ..storage_service import delete_job_storage, save_uploads
 from ..task_service import create_job, finish_job, get_job, get_user_quota, list_jobs, update_job_payload
 from ..task_service import count_active_request_slots, release_job_request_slots
@@ -216,6 +217,63 @@ def _conversation_id_for_job(item: dict[str, Any]) -> str:
     return str(record.get("conversation_id") or "").strip()
 
 
+def _normalized_edit_conversations(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    conversations: list[dict[str, Any]] = []
+    for item in value[:30]:
+        if not isinstance(item, dict):
+            continue
+        conversation_id = str(item.get("id") or "").strip()
+        messages = item.get("messages")
+        if not conversation_id or not isinstance(messages, list) or not messages:
+            continue
+        conversations.append(item)
+    return conversations
+
+
+def _get_user_edit_conversations(user_id: str) -> list[dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT payload_json FROM user_edit_conversations WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return []
+    payload = json_loads(row["payload_json"], [])
+    return _normalized_edit_conversations(payload)
+
+
+def _save_user_edit_conversations(user_id: str, conversations: Any) -> list[dict[str, Any]]:
+    normalized = _normalized_edit_conversations(conversations)
+    now = utc_now()
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_edit_conversations (user_id, payload_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+              payload_json = excluded.payload_json,
+              updated_at = excluded.updated_at
+            """,
+            (user_id, json_dumps(normalized), now, now),
+        )
+    return normalized
+
+
+def _remove_user_edit_conversation(user_id: str, conversation_id: str) -> int:
+    conversations = _get_user_edit_conversations(user_id)
+    kept = [
+        item
+        for item in conversations
+        if str(item.get("id") or "").strip() != conversation_id
+    ]
+    if len(kept) == len(conversations):
+        return 0
+    _save_user_edit_conversations(user_id, kept)
+    return len(conversations) - len(kept)
+
+
 def _task_response(job: dict[str, Any]) -> dict[str, Any]:
     shared_pool = _shared_pool(job["user_id"])
     return {
@@ -283,7 +341,7 @@ def bootstrap(user: dict = Depends(require_active_user)) -> dict[str, Any]:
         "shared_pool": _shared_pool(user["id"]),
         "history": _legacy_history(user["id"]),
         "jobs": [_legacy_job(item) for item in list_jobs(user_id=user["id"], limit=20)],
-        "edit_conversations": [],
+        "edit_conversations": _get_user_edit_conversations(user["id"]),
     }
 
 
@@ -430,17 +488,21 @@ def delete_run(
 
 
 @router.get("/edit-conversations")
-def edit_conversations(_user: dict = Depends(require_active_user)) -> dict[str, Any]:
-    return {"conversations": []}
+def edit_conversations(user: dict = Depends(require_active_user)) -> dict[str, Any]:
+    conversations = _get_user_edit_conversations(user["id"])
+    return {"conversations": conversations, "count": len(conversations)}
 
 
 @router.post("/edit-conversations")
 @router.put("/edit-conversations")
 def update_edit_conversations(
-    _payload: Any = Body(default=None),
-    _user: dict = Depends(require_csrf_user),
+    payload: Any = Body(default=None),
+    user: dict = Depends(require_csrf_user),
 ) -> dict[str, Any]:
-    return {"status": "ok", "count": 0}
+    body = payload if isinstance(payload, dict) else {}
+    conversations = body.get("conversations") if isinstance(body, dict) else []
+    saved = _save_user_edit_conversations(user["id"], conversations)
+    return {"status": "ok", "count": len(saved), "conversations": saved}
 
 
 @router.delete("/edit-conversations/{conversation_id}")
@@ -451,6 +513,7 @@ def delete_edit_conversation(
     target_conversation_id = str(conversation_id or "").strip()
     if not target_conversation_id:
         raise HTTPException(status_code=400, detail="conversation_id_required")
+    removed_conversations = _remove_user_edit_conversation(user["id"], target_conversation_id)
 
     deleted_run_ids: list[str] = []
     deleted_job_ids: list[str] = []
@@ -476,6 +539,7 @@ def delete_edit_conversation(
         "deleted_run_ids": deleted_run_ids,
         "deleted_job_ids": deleted_job_ids,
         "skipped_job_ids": skipped_job_ids,
+        "removed_conversations": removed_conversations,
     }
 
 

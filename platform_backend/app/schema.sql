@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS user_settings (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_edit_conversations (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  payload_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS user_secrets (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   secret_key TEXT NOT NULL,
