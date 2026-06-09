@@ -3,56 +3,70 @@
   "version": "0.1.1",
   "private": true,
   "description": "设计出图 Electron desktop",
-  "main": "electron/main.js",
+  "main": "main.js",
   "scripts": {
-    "dev": "electron .",
-    "start": "electron .",
-    "prepare:runtime": "python prepare_runtime.py",
-    "prepare:backend-exe": "python scripts/prepare_backend_exe_runtime.py",
-    "pack": "npm run prepare:runtime && electron-builder --dir",
-    "dist": "npm run prepare:runtime && electron-builder --win portable && node scripts/fix-win-unpacked-icon.js",
-    "dist:backend-exe": "npm run prepare:runtime && npm run prepare:backend-exe && electron-builder --win portable --config electron-builder.backend-exe.json"
+    "dev": "electron main.js",
+    "start": "npm run dev",
+    "prepare:runtime": "node scripts/legacy-backend-exe-disabled.js",
+    "prepare:backend-exe": "node scripts/legacy-backend-exe-disabled.js",
+    "prepare:platform-desktop": "python scripts/prepare_platform_desktop_runtime.py",
+    "pack": "npm run prepare:platform-desktop && electron-builder --dir",
+    "dist": "npm run dist:platform-desktop",
+    "dist:backend-exe": "node scripts/legacy-backend-exe-disabled.js",
+    "dist:legacy-backend-exe": "node scripts/legacy-backend-exe-disabled.js",
+    "dist:platform-desktop": "npm run prepare:platform-desktop && electron-builder --win portable"
   },
   "devDependencies": {
     "electron": "^36.3.2",
     "electron-builder": "^26.0.12"
   },
   "build": {
-    "appId": "local.design.output",
+    "appId": "local.design.output.platform",
     "npmRebuild": false,
     "productName": "设计出图",
     "asar": true,
+    "extraMetadata": {
+      "main": "electron-platform/main.js"
+    },
     "directories": {
-      "output": "dist-electron"
+      "output": "dist-electron-platform"
     },
     "files": [
-      "electron/**/*",
+      "electron-platform/**/*",
       "package.json"
     ],
     "extraResources": [
       {
-        "from": "electron/icon.ico",
+        "from": "icon.ico",
         "to": "icon.ico"
       },
       {
-        "from": "runtime/backend",
-        "to": "backend"
+        "from": "runtime-platform/backend",
+        "to": "platform-backend"
+      },
+      {
+        "from": "runtime-platform/python-runtime",
+        "to": "python-runtime"
+      },
+      {
+        "from": "runtime-platform/platform-seed-config.json",
+        "to": "platform-seed-config.json"
+      },
+      {
+        "from": "runtime-platform/platform-seed.db",
+        "to": "platform-seed.db"
+      },
+      {
+        "from": "runtime-platform/platform-seed.db-wal",
+        "to": "platform-seed.db-wal"
+      },
+      {
+        "from": "runtime-platform/platform-seed.db-shm",
+        "to": "platform-seed.db-shm"
       },
       {
         "from": "config.example.json",
         "to": "config.example.json"
-      },
-      {
-        "from": "runtime/seed-config.json",
-        "to": "seed-config.json"
-      },
-      {
-        "from": "web",
-        "to": "web"
-      },
-      {
-        "from": "runtime/python-runtime",
-        "to": "python-runtime"
       },
       {
         "from": "compat-mode.flag",
@@ -60,7 +74,7 @@
       }
     ],
     "win": {
-      "icon": "electron/icon.ico",
+      "icon": "icon.ico",
       "signAndEditExecutable": false,
       "target": [
         {
@@ -70,7 +84,7 @@
           ]
         }
       ],
-      "artifactName": "设计出图-${version}-win11-diagnose-20260514.${ext}"
+      "artifactName": "设计出图-平台本地版-${version}.${ext}"
     }
   }
 }

@@ -10,25 +10,40 @@ import sys
 from pathlib import Path
 from typing import Any
 
+try:
+    from checkpoint_platform_db import checkpoint_database
+except ModuleNotFoundError:
+    from scripts.checkpoint_platform_db import checkpoint_database
+
+
 ROOT_DISTRIBUTIONS = (
+    "cryptography",
     "fastapi",
     "Pillow",
+    "pydantic",
     "python-multipart",
     "requests",
     "uvicorn",
 )
 
-ALLOW_LOCAL_CONFIG_SEED_ENV = "IMAG_REPLICATE2_ALLOW_LOCAL_CONFIG_SEED"
+USE_EXAMPLE_CONFIG_SEED_ENV = "PLATFORM_USE_EXAMPLE_CONFIG_SEED"
 
 
 def project_root() -> Path:
-    return Path(__file__).resolve().parent
+    return Path(__file__).resolve().parents[1]
 
 
 def seed_config_source(root: Path) -> Path:
     example_source = root / "config.example.json"
+    live_source = root / "platform_runtime" / "config.json"
     local_source = root / "config.json"
-    if os.environ.get(ALLOW_LOCAL_CONFIG_SEED_ENV) == "1" and local_source.exists():
+    if os.environ.get(USE_EXAMPLE_CONFIG_SEED_ENV) == "1":
+        if not example_source.exists():
+            raise FileNotFoundError(f"seed config template not found: {example_source}")
+        return example_source
+    if live_source.exists():
+        return live_source
+    if local_source.exists():
         return local_source
     if not example_source.exists():
         raise FileNotFoundError(f"seed config template not found: {example_source}")
@@ -36,22 +51,14 @@ def seed_config_source(root: Path) -> Path:
 
 
 def copy_tree(source: Path, target: Path, *, ignore: Any = None) -> None:
-    shutil.copytree(
-        source,
-        target,
-        ignore=ignore,
-        dirs_exist_ok=True,
-    )
+    shutil.copytree(source, target, ignore=ignore, dirs_exist_ok=True)
 
 
 def runtime_ignore(base: Path, *, strip_site_packages: bool = False):
     def inner(current_dir: str, names: list[str]) -> set[str]:
-        ignored = set()
+        ignored = {"__pycache__"}.intersection(names)
         relative = Path(current_dir).resolve().relative_to(base.resolve())
         relative_text = relative.as_posix()
-
-        common = {"__pycache__"}
-        ignored.update(common.intersection(names))
 
         if relative_text == ".":
             for name in names:
@@ -100,9 +107,7 @@ def normalize_distribution_name(name: str) -> str:
 
 def parse_requirement_name(requirement: str) -> str | None:
     match = re.match(r"^\s*([A-Za-z0-9_.-]+)", requirement)
-    if not match:
-        return None
-    return match.group(1)
+    return match.group(1) if match else None
 
 
 def resolve_required_distributions() -> list[str]:
@@ -130,7 +135,7 @@ def resolve_required_distributions() -> list[str]:
     return sorted(resolved)
 
 
-def copy_required_site_packages(source_root: Path, target_root: Path) -> None:
+def copy_required_site_packages(target_root: Path) -> None:
     target_site_packages = target_root / "Lib" / "site-packages"
     target_site_packages.mkdir(parents=True, exist_ok=True)
 
@@ -144,11 +149,13 @@ def copy_required_site_packages(source_root: Path, target_root: Path) -> None:
                     relative_dir = source_path.relative_to(distribution_root)
                 except ValueError:
                     continue
-                copy_tree(source_path, target_site_packages / relative_dir, ignore=runtime_ignore(source_path))
+                copy_tree(
+                    source_path,
+                    target_site_packages / relative_dir,
+                    ignore=runtime_ignore(source_path),
+                )
                 continue
-            if not source_path.is_file():
-                continue
-            if source_path.suffix.lower() in {".pyc", ".pyo", ".log"}:
+            if not source_path.is_file() or source_path.suffix.lower() in {".pyc", ".pyo", ".log"}:
                 continue
             try:
                 relative_path = source_path.relative_to(distribution_root)
@@ -157,47 +164,6 @@ def copy_required_site_packages(source_root: Path, target_root: Path) -> None:
             target_path = target_site_packages / relative_path
             target_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, target_path)
-
-
-def update_package_json(
-    root: Path,
-    *,
-    python_target: Path,
-    backend_target: Path,
-) -> None:
-    package_path = root / "package.json"
-    payload = json.loads(package_path.read_text(encoding="utf-8"))
-    extra_resources = payload.setdefault("build", {}).setdefault("extraResources", [])
-
-    resource_paths = {
-        "backend": str(backend_target.relative_to(root)).replace("\\", "/"),
-        "python-runtime": str(python_target.relative_to(root)).replace("\\", "/"),
-    }
-    for item in extra_resources:
-        target_name = item.get("to")
-        if target_name in resource_paths:
-            item["from"] = resource_paths[target_name]
-
-    package_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-
-def cleanup_old_build_dirs(
-    runtime_root: Path,
-    *,
-    python_target: Path,
-    backend_target: Path,
-) -> None:
-    for pattern, active_path in (
-        ("python-runtime-build-*", python_target),
-        ("backend-build-*", backend_target),
-    ):
-        for candidate in runtime_root.glob(pattern):
-            if candidate == active_path:
-                continue
-            shutil.rmtree(candidate, ignore_errors=True)
 
 
 def copy_root_files(source_root: Path, target_root: Path) -> None:
@@ -211,79 +177,91 @@ def copy_root_files(source_root: Path, target_root: Path) -> None:
         "vcruntime140_1.dll",
         "LICENSE.txt",
     }
+    allowed_lower = {name.lower() for name in allow_names}
     for item in source_root.iterdir():
-        if not item.is_file():
-            continue
-        if item.name.lower() in {name.lower() for name in allow_names}:
+        if item.is_file() and item.name.lower() in allowed_lower:
             shutil.copy2(item, target_root / item.name)
 
 
-def main() -> int:
-    root = project_root()
-    runtime_root = root / "runtime"
-    python_target = runtime_root / "python-runtime"
-    backend_target = runtime_root / "backend"
+def prepare_python_runtime(root: Path, target: Path) -> None:
     source_python_root = Path(sys.base_prefix).resolve()
-
-    runtime_root.mkdir(parents=True, exist_ok=True)
-    for target in (python_target, backend_target):
-        if target.exists():
-            shutil.rmtree(target)
-    python_target.mkdir(parents=True, exist_ok=True)
-
-    copy_root_files(source_python_root, python_target)
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True, exist_ok=True)
+    copy_root_files(source_python_root, target)
     for directory_name in ("DLLs", "Lib", "tcl"):
         source_dir = source_python_root / directory_name
         if source_dir.exists():
             copy_tree(
                 source_dir,
-                python_target / directory_name,
+                target / directory_name,
                 ignore=runtime_ignore(
                     source_dir,
                     strip_site_packages=directory_name == "Lib",
                 ),
             )
-    copy_required_site_packages(source_python_root, python_target)
-
-    for path in python_target.rglob("*"):
+    copy_required_site_packages(target)
+    for path in target.rglob("*"):
         if path.is_file() and path.suffix.lower() in {".pyc", ".pyo", ".log"}:
-            try:
-                path.unlink()
-            except OSError:
-                continue
+            path.unlink(missing_ok=True)
 
-    backend_target.mkdir(parents=True, exist_ok=True)
+
+def prepare_backend(root: Path, target: Path) -> None:
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True, exist_ok=True)
+    for directory_name in ("platform_backend", "platform_frontend"):
+        copy_tree(root / directory_name, target / directory_name)
     for file_name in (
-        "app.py",
-        "api_server.py",
-        "backend_main.py",
+        "config.example.json",
         "pipeline_core.py",
-        "legacy_tk_app.py",
     ):
-        shutil.copy2(root / file_name, backend_target / file_name)
+        shutil.copy2(root / file_name, target / file_name)
+    env_path = root / ".env"
+    if env_path.exists():
+        shutil.copy2(env_path, target / ".env")
 
-    seed_source = seed_config_source(root)
-    shutil.copy2(seed_source, runtime_root / "seed-config.json")
 
-    update_package_json(
-        root,
-        python_target=python_target,
-        backend_target=backend_target,
-    )
-    cleanup_old_build_dirs(
-        runtime_root,
-        python_target=python_target,
-        backend_target=backend_target,
-    )
+def prepare_seed_config(root: Path, runtime_root: Path) -> None:
+    source = seed_config_source(root)
+    shutil.copy2(source, runtime_root / "platform-seed-config.json")
 
-    for stale_dir in (runtime_root / "python-runtime-slim", runtime_root / "python-runtime-stage", runtime_root / "backend-stage", runtime_root / "win-unpacked"):
-        shutil.rmtree(stale_dir, ignore_errors=True)
-    for stale_file in runtime_root.glob("builder-*.yml"):
-        stale_file.unlink(missing_ok=True)
 
-    print(f"python runtime prepared: {python_target}")
-    print(f"backend sources prepared: {backend_target}")
-    print(f"seed config source: {seed_source}")
+def prepare_seed_database(root: Path, runtime_root: Path) -> None:
+    database_root = root / "platform_runtime"
+    checkpoint_database(database_root / "platform.db")
+    copied_names: set[str] = set()
+    for source_name, target_name in (
+        ("platform.db", "platform-seed.db"),
+        ("platform.db-wal", "platform-seed.db-wal"),
+        ("platform.db-shm", "platform-seed.db-shm"),
+    ):
+        source = database_root / source_name
+        if source.exists():
+            shutil.copy2(source, runtime_root / target_name)
+            copied_names.add(target_name)
+    for target_name in ("platform-seed.db-wal", "platform-seed.db-shm"):
+        if "platform-seed.db" in copied_names and target_name not in copied_names:
+            (runtime_root / target_name).write_bytes(b"")
+
+
+def main() -> int:
+    root = project_root()
+    runtime_root = root / "runtime-platform"
+    python_target = runtime_root / "python-runtime"
+    backend_target = runtime_root / "backend"
+    runtime_root.mkdir(parents=True, exist_ok=True)
+
+    prepare_python_runtime(root, python_target)
+    prepare_backend(root, backend_target)
+    prepare_seed_config(root, runtime_root)
+    prepare_seed_database(root, runtime_root)
+
+    print(f"platform python runtime prepared: {python_target}")
+    print(f"platform backend prepared: {backend_target}")
+    print(f"platform seed config prepared: {runtime_root / 'platform-seed-config.json'}")
+    print(f"platform seed config source: {seed_config_source(root)}")
+    print(f"platform seed database source: {root / 'platform_runtime' / 'platform.db'}")
     return 0
 
 

@@ -27,11 +27,17 @@ def _env(name: str, default: str) -> str:
     return value if value not in (None, "") else default
 
 
+DEFAULT_BASE_DIR = Path(_env("PLATFORM_BASE_DIR", "platform_runtime")).resolve()
+DEFAULT_CONFIG_PATH = DEFAULT_BASE_DIR / "config.json"
+
+
 @dataclass(frozen=True)
 class PlatformConfig:
     app_name: str = "设计出图内部平台"
-    base_dir: Path = Path(_env("PLATFORM_BASE_DIR", "platform_runtime")).resolve()
-    original_config_path: Path = Path(_env("PLATFORM_CONFIG_PATH", "config.json")).resolve()
+    base_dir: Path = DEFAULT_BASE_DIR
+    original_config_path: Path = Path(
+        _env("PLATFORM_CONFIG_PATH", str(DEFAULT_CONFIG_PATH))
+    ).resolve()
     database_path: Path = Path(
         _env("PLATFORM_DATABASE_PATH", "platform_runtime/platform.db")
     ).resolve()
@@ -51,8 +57,19 @@ class PlatformConfig:
         _env("PLATFORM_HISTORY_CLEANUP_INTERVAL_HOURS", "24")
     )
     worker_poll_seconds: float = float(_env("PLATFORM_WORKER_POLL_SECONDS", "2"))
-    worker_concurrency: int = max(1, int(_env("PLATFORM_WORKER_CONCURRENCY", "20")))
+    worker_concurrency: int = max(1, int(_env("PLATFORM_WORKER_CONCURRENCY", "100")))
+    default_user_concurrent_limit: int = max(
+        1,
+        int(_env("PLATFORM_DEFAULT_USER_CONCURRENT_LIMIT", "30")),
+    )
+    max_user_concurrent_limit: int = max(
+        1,
+        int(_env("PLATFORM_MAX_USER_CONCURRENT_LIMIT", "100")),
+    )
     pipeline_enabled: bool = _env("PLATFORM_ENABLE_PIPELINE", "1") == "1"
+    desktop_mode: bool = _env("PLATFORM_DESKTOP_MODE", "0") == "1"
+    desktop_user_only: bool = _env("PLATFORM_DESKTOP_USER_ONLY", "0") == "1"
+    desktop_global_secrets: bool = _env("PLATFORM_DESKTOP_GLOBAL_SECRETS", "0") == "1"
 
     def ensure_dirs(self) -> None:
         self.base_dir.mkdir(parents=True, exist_ok=True)

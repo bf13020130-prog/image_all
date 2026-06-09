@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS user_quotas (
   balance INTEGER NOT NULL DEFAULT 0,
   daily_limit INTEGER NOT NULL DEFAULT 0,
   monthly_limit INTEGER NOT NULL DEFAULT 0,
-  concurrent_limit INTEGER NOT NULL DEFAULT 20,
+  concurrent_limit INTEGER NOT NULL DEFAULT 30,
   storage_limit_mb INTEGER NOT NULL DEFAULT 10240,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

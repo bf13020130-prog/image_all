@@ -155,7 +155,7 @@ def image_thumbnail_url(
         thumbnail_url = path_to_pipeline_file_url(thumbnail_path, job)
         if thumbnail_url:
             return thumbnail_url
-    return path_to_pipeline_thumbnail_url(path, job)
+    return path_to_pipeline_file_url(path, job)
 
 
 def image_url_pair(

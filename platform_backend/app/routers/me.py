@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/v1/me", tags=["me"])
 
 class SettingsUpdateRequest(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
-    secrets: dict[str, str] = Field(default_factory=dict)
+    secrets: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.get("/settings")

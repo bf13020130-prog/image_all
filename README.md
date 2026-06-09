@@ -41,7 +41,7 @@
 - 网络请求代理开关（默认不使用系统代理，直连供应商接口）
 - 系统提示词
 - 图片 Agent 规划/创作提示词
-- 大模型请求设置
+- 大模型请求设置（复刻风格图片、复刻风格图片2、Agent 和一键追色都可选择 `/v1/chat/completions` 或 `/v1/responses`）
 
 ## Win11 / 低配电脑兼容
 
@@ -88,7 +88,7 @@ logs/
 ## 开发启动
 
 ```powershell
-cd D:\work\code\skills\imag_Replicate2
+cd D:\work\code\skills\imag_Replicate_lan
 npm install
 npm run dev
 ```
@@ -102,43 +102,42 @@ launch.bat
 ## 打包
 
 ```powershell
-cd D:\work\code\skills\imag_Replicate2
+cd D:\work\code\skills\imag_Replicate_lan
 build.bat
 ```
 
 `build.bat` 会自动执行：
 
-1. `python prepare_runtime.py`
-2. `npm install`
-3. `npm run dist`
+1. `npm install`
+2. `npm run dist:platform-desktop`
 
 打包输出在：
 
 ```text
-dist-electron/
+dist-electron-platform/
   设计出图-<version>.exe
-  win-unpacked/
 ```
 
 ## 运行时说明
 
-`prepare_runtime.py` 会自动生成最小化的嵌入式 Python 运行时，并同步更新 Electron 打包资源路径。这样打包出来的桌面版会把：
+`scripts/prepare_platform_desktop_runtime.py` 会自动生成最小化的嵌入式 Python 运行时，并准备平台后端资源。这样打包出来的平台桌面版会把：
 
-- 本地后端源码
+- 平台后端源码
 - 精简 Python 运行时
-- Web 前端资源
+- 用户端和管理端前端资源
 
 一起带进包里，不依赖用户额外安装 Python。
 
-## 独立后端 exe 打包
+## 旧 backend-exe 链路
 
-如果目标机器上 bundled Python 后端启动异常，可以生成独立后端 exe 版本：
+旧单机桌面的独立后端 exe 链路已经退役。当前维护的是平台桌面包：
 
 ```powershell
-npm run dist:backend-exe
+npm run dist:platform-desktop
 ```
 
-这个版本会先用 PyInstaller 把 `backend_main.py` 打成 `runtime/backend-exe/design_output_backend.exe`，Electron 启动时会优先使用 `resources/backend-exe/design_output_backend.exe`；如果包里没有这个 exe，仍会回退到原来的 `python-runtime + backend_main.py` 启动方式。
+为了避免误操作，`npm run dist:backend-exe`、`npm run dist:legacy-backend-exe`、`npm run prepare:runtime` 和 `npm run prepare:backend-exe` 都只会提示使用平台桌面打包命令，不再执行旧链路。
+
 
 ## 2026-04-24 Update
 

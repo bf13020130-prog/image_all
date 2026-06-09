@@ -32,7 +32,9 @@ dist-backend-test/
 dist-electron/
 dist-electron-backend-exe/
 dist-electron-backend-exe-final/
+dist-electron-platform/
 runtime/
+runtime-platform/
 release/
 
 # Dependencies and caches

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..auth import public_user, require_admin, require_csrf_user
+from ..config import CONFIG
 from ..database import connect, new_id, row_to_dict, transaction
 from ..legacy_contract import (
     ADMIN_LOG_LINE_LIMIT,
@@ -13,9 +14,9 @@ from ..legacy_contract import (
     collect_job_log_entries,
 )
 from ..security import hash_password, make_temporary_password, utc_now
-from ..settings_service import get_admin_global_settings, save_global_settings
+from ..settings_service import delete_user_settings, get_admin_global_settings, save_global_settings
 from ..storage_service import delete_user_storage, storage_used_by_user
-from ..task_service import audit_log, get_job, get_user_quota, list_jobs
+from ..task_service import audit_log, delete_job, get_job, get_user_quota, list_jobs
 
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -26,7 +27,7 @@ class UserCreateRequest(BaseModel):
     display_name: str = Field(default="", max_length=120)
     password: str | None = Field(default=None, min_length=8, max_length=200)
     role: str = Field(default="user")
-    concurrent_limit: int = Field(default=20, ge=1, le=50)
+    concurrent_limit: int = Field(default=30, ge=1, le=CONFIG.max_user_concurrent_limit)
     storage_limit_mb: int = Field(default=10240, ge=100, le=10_000_000)
 
 
@@ -34,7 +35,7 @@ class UserPatchRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=120)
     role: str | None = Field(default=None)
     status: str | None = Field(default=None)
-    concurrent_limit: int | None = Field(default=None, ge=1, le=50)
+    concurrent_limit: int | None = Field(default=None, ge=1, le=CONFIG.max_user_concurrent_limit)
     storage_limit_mb: int | None = Field(default=None, ge=100, le=10_000_000)
     balance_delta: int | None = Field(default=None, ge=-1_000_000, le=1_000_000)
     balance_reason: str = Field(default="管理员调整", max_length=200)
@@ -45,6 +46,8 @@ class GlobalSettingsRequest(BaseModel):
 
 
 def _admin(user: dict) -> dict:
+    if CONFIG.desktop_user_only:
+        raise HTTPException(status_code=404, detail="管理端在桌面版中不可用。")
     require_admin(user)
     return user
 
@@ -275,6 +278,7 @@ def delete_user(target_user_id: str, user: dict = Depends(require_csrf_user)) ->
         if not row:
             raise HTTPException(status_code=404, detail="用户不存在。")
     deleted_files = delete_user_storage(target_user_id)
+    delete_user_settings(target_user_id)
     with transaction() as conn:
         conn.execute("DELETE FROM users WHERE id = ?", (target_user_id,))
     audit_log(
@@ -290,6 +294,19 @@ def delete_user(target_user_id: str, user: dict = Depends(require_csrf_user)) ->
 def admin_jobs(user: dict = Depends(require_csrf_user)) -> dict:
     _admin(user)
     return {"data": list_jobs(limit=200)}
+
+
+@router.delete("/jobs/{job_id}")
+def admin_delete_job(job_id: str, user: dict = Depends(require_csrf_user)) -> dict:
+    _admin(user)
+    result = delete_job(job_id)
+    audit_log(
+        actor_id=user["id"],
+        action="job.delete",
+        target_type="job",
+        target_id=job_id,
+    )
+    return result
 
 
 @router.get("/logs")

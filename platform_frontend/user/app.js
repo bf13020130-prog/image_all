@@ -123,6 +123,44 @@ const API_BASE_SETTING_KEYS = new Set([
   "gpt_image_api_base",
   "gemini_image_api_base",
 ]);
+const KEY_POOL_CONFIGS = {
+  llm: {
+    poolKey: "llm_key_pool",
+    defaultKey: "default_llm_key_id",
+    itemLabel: "大模型 Key",
+    apiBaseFallbackKey: "llm_api_base",
+    modelFallbackKey: "chat_model",
+    endpointFallbackKey: "llm_endpoint_type",
+    fields: {
+      model: true,
+      endpointType: true,
+    },
+  },
+  gpt1k: {
+    poolKey: "gpt_image_1k_key_pool",
+    defaultKey: "default_gpt_image_1k_key_id",
+    itemLabel: "1K 生图 Key",
+    apiBaseFallbackKey: "gpt_image_1k_api_base",
+    fields: {},
+  },
+  gpt2k4k: {
+    poolKey: "gpt_image_key_pool",
+    defaultKey: "default_gpt_image_key_id",
+    itemLabel: "2K/4K 生图 Key",
+    apiBaseFallbackKey: "gpt_image_api_base",
+    fields: {},
+  },
+  gemini: {
+    poolKey: "gemini_image_key_pool",
+    defaultKey: "default_gemini_image_key_id",
+    itemLabel: "Banana / Gemini Key",
+    apiBaseFallbackKey: "gemini_image_api_base",
+    modelFallbackValue: IMAGE_MODEL_NANO_BANANA_2,
+    fields: {
+      model: true,
+    },
+  },
+};
 const LEGACY_IMAGE_MODEL_ALIASES = {
   "nano-banana-2": IMAGE_MODEL_NANO_BANANA_2,
   "nano-banana-2-1k": IMAGE_MODEL_NANO_BANANA_2,
@@ -409,7 +447,7 @@ function applyPlatformUserChrome() {
   badge.className = "status-pill status-pill--user";
   badge.textContent = `${user.display_name || user.username || "用户"} · ${user.role || "user"}`;
   topActions.prepend(badge);
-  if (user.role === "admin") {
+  if (user.role === "admin" && !state.settings?.desktop_user_only) {
     const adminLink = document.createElement("a");
     adminLink.className = "icon-button platform-top-link";
     adminLink.href = "/admin/";
@@ -742,6 +780,18 @@ function bindEvents() {
 
   refs.settingsForm.addEventListener("input", onSettingsChanged);
   refs.settingsForm.addEventListener("change", onSettingsChanged);
+  refs.settingsForm.addEventListener("click", (event) => {
+    const addButton = event.target.closest("[data-key-pool-add]");
+    if (addButton) {
+      addKeyPoolItem(addButton.dataset.keyPoolAdd);
+      return;
+    }
+    const removeButton = event.target.closest("[data-key-pool-remove]");
+    if (removeButton) {
+      const poolId = removeButton.dataset.keyPoolRemove;
+      removeKeyPoolItem(poolId, removeButton.closest("[data-key-pool-row]"));
+    }
+  });
   refs.saveSettingsButton.addEventListener("click", () => {
     void saveSettings();
   });
@@ -2322,7 +2372,7 @@ function renderEditHistoryList() {
     if (firstImage) {
       const thumb = button.querySelector(".edit-history-item__thumb");
       const image = document.createElement("img");
-      image.src = toApiUrl(firstImage.thumbnailUrl);
+      setPreviewImageSource(image, firstImage.thumbnailUrl, firstImage.url);
       image.alt = "历史结果";
       image.loading = "lazy";
       image.decoding = "async";
@@ -2627,7 +2677,7 @@ function buildEditMessage(message, job) {
       button.className = "edit-result-thumb";
       button.setAttribute("aria-label", `查看生成图片 ${index + 1}`);
       const image = document.createElement("img");
-      image.src = toApiUrl(item.thumbnailUrl);
+      setPreviewImageSource(image, item.thumbnailUrl, item.url);
       image.alt = `生成图片 ${index + 1}`;
       image.loading = "lazy";
       image.decoding = "async";
@@ -2878,6 +2928,11 @@ function buildTaskCard(job) {
           ? '<button class="secondary-action secondary-action--small" type="button" data-download-package>下载任务包</button>'
           : ""
       }
+      ${
+        jobId && ["completed", "partial", "failed"].includes(job.status)
+          ? '<button class="secondary-action secondary-action--small" type="button" data-delete-task>删除</button>'
+          : ""
+      }
     </div>
   `;
 
@@ -2915,7 +2970,7 @@ function buildTaskCard(job) {
         });
 
         const image = document.createElement("img");
-        image.src = toApiUrl(item.thumbnailUrl);
+        setPreviewImageSource(image, item.thumbnailUrl, item.url);
         image.alt = `${getJobTitle(job)} 预览`;
         image.loading = "lazy";
         image.decoding = "async";
@@ -2948,6 +3003,16 @@ function buildTaskCard(job) {
       } else if (record?.download_url) {
         void downloadRun(record.run_id, record.download_url, "任务包");
       }
+    });
+  }
+
+  const deleteTaskButton = card.querySelector("[data-delete-task]");
+  if (deleteTaskButton && jobId) {
+    deleteTaskButton.addEventListener("click", () => {
+      void deleteRunHistory({
+        job_id: jobId,
+        run_id: record?.run_id || "",
+      });
     });
   }
 
@@ -3239,7 +3304,7 @@ function appendColorMatchResults(
     tile.appendChild(label);
 
     const image = document.createElement("img");
-    image.src = toApiUrl(entry.item.thumbnailUrl);
+    setPreviewImageSource(image, entry.item.thumbnailUrl, entry.item.url);
     image.alt = entry.label;
     image.loading = "lazy";
     image.decoding = "async";
@@ -3400,7 +3465,7 @@ function renderHistory() {
         });
 
         const image = document.createElement("img");
-        image.src = toApiUrl(item.thumbnailUrl);
+        setPreviewImageSource(image, item.thumbnailUrl, item.url);
         image.alt = `${record.project_name || "image"} 预览`;
         image.loading = "lazy";
         image.decoding = "async";
@@ -3439,6 +3504,10 @@ function applySettingsToForm() {
     const llmEndpointTypes = state.settings.available_llm_endpoint_types || [];
     const maxSharedConcurrency = Number(state.settings.max_shared_concurrency || 0) || 1;
     const imageModelSelect = refs.settingsForm.elements.namedItem("image_model");
+    const llmEndpointSelect =
+      refs.settingsForm.elements.namedItem("llm_endpoint_type");
+    const colorMatchEndpointSelect =
+      refs.settingsForm.elements.namedItem("color_match_endpoint_type");
     const imageAgentEndpointSelect =
       refs.settingsForm.elements.namedItem("image_agent_endpoint_type");
     const settingsResolutionSelect =
@@ -3470,6 +3539,18 @@ function applySettingsToForm() {
       imageModelSelect.innerHTML = buildOptions(
         imageModels,
         state.settings.image_model
+      );
+    }
+    if (llmEndpointSelect?.tagName === "SELECT") {
+      llmEndpointSelect.innerHTML = buildOptions(
+        llmEndpointTypes,
+        state.settings.llm_endpoint_type
+      );
+    }
+    if (colorMatchEndpointSelect?.tagName === "SELECT") {
+      colorMatchEndpointSelect.innerHTML = buildOptions(
+        llmEndpointTypes,
+        state.settings.color_match_endpoint_type
       );
     }
     if (imageAgentEndpointSelect?.tagName === "SELECT") {
@@ -3538,6 +3619,7 @@ function applySettingsToForm() {
         element.dataset.originalSecretValue = String(element.value || "");
       }
     });
+    renderKeyPools();
     renderSecretFieldStatuses();
   } finally {
     state.isHydratingSettings = false;
@@ -3606,6 +3688,322 @@ function updateSecretFieldStatus(input) {
   statusNode.textContent = "未保存，请填写后自动保存";
   statusNode.classList.add("secret-save-state--empty");
   input.placeholder = "请输入你的 API Key";
+}
+
+function renderKeyPools() {
+  Object.keys(KEY_POOL_CONFIGS).forEach((poolId) => renderKeyPool(poolId));
+  enhancePasswordFields();
+}
+
+function renderKeyPool(poolId) {
+  const config = KEY_POOL_CONFIGS[poolId];
+  const block = refs.settingsForm?.querySelector(`[data-key-pool="${poolId}"]`);
+  const rowsNode = refs.settingsForm?.querySelector(`[data-key-pool-rows="${poolId}"]`);
+  const defaultSelect = refs.settingsForm?.querySelector(
+    `[data-key-pool-default="${poolId}"]`
+  );
+  if (!config || !block || !rowsNode || !defaultSelect) {
+    return;
+  }
+  const items = normalizeKeyPoolItems(poolId);
+  rowsNode.innerHTML = "";
+  const displayItems = items.length ? items : [createKeyPoolItem(poolId, 1)];
+  displayItems.forEach((item, index) => {
+    rowsNode.appendChild(createKeyPoolRow(poolId, item, index + 1));
+  });
+  syncKeyPoolDefaultOptions(poolId, state.settings?.[config.defaultKey] || "");
+}
+
+function normalizeKeyPoolItems(poolId) {
+  const config = KEY_POOL_CONFIGS[poolId];
+  const rawItems = Array.isArray(state.settings?.[config.poolKey])
+    ? state.settings[config.poolKey]
+    : [];
+  return rawItems
+    .filter((item) => item && typeof item === "object")
+    .map((item, index) => ({
+      ...createKeyPoolItem(poolId, index + 1),
+      ...item,
+      id: String(item.id || "").trim() || createKeyPoolItemId(poolId),
+      name:
+        String(item.name || "").trim() ||
+        `${config.itemLabel} ${index + 1}`,
+      api_base:
+        String(item.api_base || "").trim() ||
+        String(state.settings?.[config.apiBaseFallbackKey] || "").trim(),
+      api_key: String(item.api_key || "").trim(),
+      enabled: item.enabled !== false,
+    }));
+}
+
+function createKeyPoolItem(poolId, index = 1) {
+  const config = KEY_POOL_CONFIGS[poolId];
+  const fallbackModel =
+    config.modelFallbackValue ||
+    String(state.settings?.[config.modelFallbackKey] || "").trim();
+  return {
+    id: createKeyPoolItemId(poolId),
+    name: `${config.itemLabel} ${index}`,
+    api_base: String(state.settings?.[config.apiBaseFallbackKey] || "").trim(),
+    api_key: "",
+    model: fallbackModel,
+    endpoint_type:
+      String(state.settings?.[config.endpointFallbackKey] || "").trim() ||
+      "chat_completions",
+    enabled: true,
+  };
+}
+
+function createKeyPoolItemId(poolId) {
+  const random = Math.random().toString(36).slice(2, 8);
+  return `${poolId}_${Date.now().toString(36)}_${random}`;
+}
+
+function createKeyPoolRow(poolId, item, index) {
+  const config = KEY_POOL_CONFIGS[poolId];
+  const row = document.createElement("div");
+  row.className = "key-pool-row";
+  row.dataset.keyPoolRow = poolId;
+  row.dataset.keyPoolItemId = item.id;
+
+  const grid = document.createElement("div");
+  grid.className = "key-pool-row__grid";
+  grid.appendChild(
+    createKeyPoolTextField("名称", "name", item.name || `${config.itemLabel} ${index}`)
+  );
+  grid.appendChild(createKeyPoolTextField("API Base", "api_base", item.api_base || ""));
+  grid.appendChild(createKeyPoolPasswordField(item.api_key || ""));
+  if (config.fields.model) {
+    grid.appendChild(createKeyPoolModelField(poolId, item.model || ""));
+  }
+  if (config.fields.endpointType) {
+    grid.appendChild(createKeyPoolEndpointField(item.endpoint_type || ""));
+  }
+  row.appendChild(grid);
+
+  const actions = document.createElement("div");
+  actions.className = "key-pool-row__actions";
+  const enabledLabel = document.createElement("label");
+  enabledLabel.className = "field field--checkbox key-pool-row__enabled";
+  const enabledInput = document.createElement("input");
+  enabledInput.type = "checkbox";
+  enabledInput.checked = item.enabled !== false;
+  enabledInput.dataset.keyPoolField = "enabled";
+  enabledLabel.append(enabledInput, textNode("启用"));
+  const removeButton = document.createElement("button");
+  removeButton.type = "button";
+  removeButton.className = "secondary-action secondary-action--small key-pool-row__remove";
+  removeButton.dataset.keyPoolRemove = poolId;
+  removeButton.textContent = "删除";
+  actions.append(enabledLabel, removeButton);
+  row.appendChild(actions);
+  return row;
+}
+
+function createKeyPoolTextField(labelText, fieldName, value) {
+  const label = document.createElement("label");
+  label.className = "field";
+  label.appendChild(textNode(labelText));
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = value;
+  input.dataset.keyPoolField = fieldName;
+  if (fieldName === "api_base") {
+    input.autocomplete = "off";
+    input.inputMode = "url";
+    input.spellcheck = false;
+  }
+  label.appendChild(input);
+  return label;
+}
+
+function createKeyPoolPasswordField(value) {
+  const label = document.createElement("label");
+  label.className = "field";
+  label.appendChild(textNode("API Key"));
+  const input = document.createElement("input");
+  input.type = "password";
+  input.value = value;
+  input.autocomplete = "new-password";
+  input.dataset.keyPoolField = "api_key";
+  input.setAttribute("data-lpignore", "true");
+  input.setAttribute("data-1p-ignore", "true");
+  label.appendChild(input);
+  return label;
+}
+
+function createKeyPoolModelField(poolId, value) {
+  const label = document.createElement("label");
+  label.className = "field";
+  label.appendChild(textNode("模型 ID"));
+  if (poolId === "gemini") {
+    const select = document.createElement("select");
+    select.dataset.keyPoolField = "model";
+    const modelOptions = (state.settings?.available_image_models || []).filter((option) =>
+      isNanoBananaModel(option.value ?? option)
+    );
+    const selectedValue = value || IMAGE_MODEL_NANO_BANANA_2;
+    select.innerHTML = buildOptions(
+      modelOptions.length
+        ? modelOptions
+        : [
+            { value: IMAGE_MODEL_NANO_BANANA_2, label: IMAGE_MODEL_NANO_BANANA_2 },
+            { value: IMAGE_MODEL_NANO_BANANA_PRO, label: IMAGE_MODEL_NANO_BANANA_PRO },
+          ],
+      selectedValue
+    );
+    label.appendChild(select);
+    return label;
+  }
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = value;
+  input.dataset.keyPoolField = "model";
+  label.appendChild(input);
+  return label;
+}
+
+function createKeyPoolEndpointField(value) {
+  const label = document.createElement("label");
+  label.className = "field";
+  label.appendChild(textNode("API 类型"));
+  const select = document.createElement("select");
+  select.dataset.keyPoolField = "endpoint_type";
+  select.innerHTML = buildOptions(
+    state.settings?.available_llm_endpoint_types || [
+      { value: "chat_completions", label: "/v1/chat/completions" },
+      { value: "responses", label: "/v1/responses" },
+    ],
+    value || "chat_completions"
+  );
+  label.appendChild(select);
+  return label;
+}
+
+function textNode(value) {
+  const span = document.createElement("span");
+  span.textContent = value;
+  return span;
+}
+
+function syncKeyPoolDefaultOptions(poolId, selectedValue = "") {
+  const defaultSelect = refs.settingsForm?.querySelector(
+    `[data-key-pool-default="${poolId}"]`
+  );
+  if (!defaultSelect) {
+    return;
+  }
+  const wantedValue = selectedValue || defaultSelect.value || "";
+  const rows = Array.from(
+    refs.settingsForm.querySelectorAll(`[data-key-pool-row="${poolId}"]`)
+  );
+  const items = rows.map((row, index) =>
+    readKeyPoolRow(poolId, row, index, true, false)
+  );
+  const selectedId =
+    wantedValue && items.some((item) => item.id === wantedValue)
+      ? wantedValue
+      : items.find((item) => item.enabled && item.api_key)?.id || items[0]?.id || "";
+  defaultSelect.innerHTML = "";
+  items.forEach((item, index) => {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = item.name || `${KEY_POOL_CONFIGS[poolId].itemLabel} ${index + 1}`;
+    option.selected = item.id === selectedId;
+    defaultSelect.appendChild(option);
+  });
+}
+
+function addKeyPoolItem(poolId) {
+  const rowsNode = refs.settingsForm?.querySelector(`[data-key-pool-rows="${poolId}"]`);
+  if (!rowsNode || !KEY_POOL_CONFIGS[poolId]) {
+    return;
+  }
+  const nextIndex = rowsNode.querySelectorAll("[data-key-pool-row]").length + 1;
+  rowsNode.appendChild(createKeyPoolRow(poolId, createKeyPoolItem(poolId, nextIndex), nextIndex));
+  syncKeyPoolDefaultOptions(poolId);
+  enhancePasswordFields();
+}
+
+function removeKeyPoolItem(poolId, row) {
+  if (!row) {
+    return;
+  }
+  row.remove();
+  const rowsNode = refs.settingsForm?.querySelector(`[data-key-pool-rows="${poolId}"]`);
+  if (rowsNode && !rowsNode.querySelector("[data-key-pool-row]")) {
+    rowsNode.appendChild(createKeyPoolRow(poolId, createKeyPoolItem(poolId, 1), 1));
+    enhancePasswordFields();
+  }
+  syncKeyPoolDefaultOptions(poolId);
+  onSettingsChanged({ target: refs.settingsForm });
+}
+
+function collectKeyPools() {
+  const payload = {};
+  Object.entries(KEY_POOL_CONFIGS).forEach(([poolId, config]) => {
+    const rows = Array.from(
+      refs.settingsForm.querySelectorAll(`[data-key-pool-row="${poolId}"]`)
+    );
+    const items = rows
+      .map((row, index) => readKeyPoolRow(poolId, row, index, false))
+      .filter(Boolean);
+    const defaultSelect = refs.settingsForm.querySelector(
+      `[data-key-pool-default="${poolId}"]`
+    );
+    const selectedDefault = String(defaultSelect?.value || "").trim();
+    payload[config.poolKey] = items;
+    payload[config.defaultKey] = items.some((item) => item.id === selectedDefault)
+      ? selectedDefault
+      : items[0]?.id || "";
+  });
+  return payload;
+}
+
+function readKeyPoolRow(
+  poolId,
+  row,
+  index = 0,
+  includeEmpty = false,
+  validateApiBase = true
+) {
+  const config = KEY_POOL_CONFIGS[poolId];
+  const readField = (fieldName) => {
+    const control = row.querySelector(`[data-key-pool-field="${fieldName}"]`);
+    if (!control) {
+      return "";
+    }
+    if (control.type === "checkbox") {
+      return control.checked;
+    }
+    return String(control.value || "").trim();
+  };
+  let apiBase = readField("api_base");
+  if (validateApiBase && !isValidApiBaseValue(apiBase)) {
+    apiBase = String(state.settings?.[config.apiBaseFallbackKey] || "").trim();
+    const input = row.querySelector('[data-key-pool-field="api_base"]');
+    if (input) {
+      input.value = apiBase;
+    }
+  }
+  const apiKey = readField("api_key");
+  if (!includeEmpty && !apiKey) {
+    return null;
+  }
+  const item = {
+    id: String(row.dataset.keyPoolItemId || "").trim() || createKeyPoolItemId(poolId),
+    name: readField("name") || `${config.itemLabel} ${index + 1}`,
+    api_base: apiBase,
+    api_key: apiKey,
+    enabled: Boolean(readField("enabled")),
+  };
+  if (config.fields.model) {
+    item.model = readField("model") || config.modelFallbackValue || "";
+  }
+  if (config.fields.endpointType) {
+    item.endpoint_type = readField("endpoint_type") || "chat_completions";
+  }
+  return item;
 }
 
 function applyTaskDefaults(force = false) {
@@ -3727,6 +4125,11 @@ function onSettingsChanged(event) {
     return;
   }
 
+  const poolRow = event?.target?.closest?.("[data-key-pool-row]");
+  if (poolRow) {
+    syncKeyPoolDefaultOptions(poolRow.dataset.keyPoolRow);
+  }
+
   if (isSecretSettingField(event?.target)) {
     updateSecretFieldStatus(event.target);
   }
@@ -3795,7 +4198,10 @@ function collectSettingsPayload() {
     payload[element.name] =
       element.type === "checkbox" ? element.checked : element.value;
   });
-  return payload;
+  return {
+    ...payload,
+    ...collectKeyPools(),
+  };
 }
 
 function isValidApiBaseValue(value) {
@@ -5480,7 +5886,7 @@ async function openDownloadSelection(jobId) {
     const imageUrl = file.thumbnail_url || file.url;
     if (imageUrl) {
       const image = document.createElement("img");
-      image.src = toApiUrl(imageUrl);
+      setPreviewImageSource(image, file.thumbnail_url || file.url, file.url);
       image.alt = file.name || `图片 ${index + 1}`;
       image.loading = "lazy";
       image.decoding = "async";
@@ -5800,6 +6206,23 @@ function toApiUrl(url) {
     return `${state.apiBase}${url}`;
   }
   return `${state.apiBase}/${url}`;
+}
+
+function setPreviewImageSource(image, thumbnailUrl, fallbackUrl = "") {
+  const previewSrc = toApiUrl(thumbnailUrl || fallbackUrl);
+  const fallbackSrc = toApiUrl(fallbackUrl || thumbnailUrl);
+  image.src = previewSrc;
+  if (fallbackSrc && fallbackSrc !== previewSrc) {
+    image.addEventListener(
+      "error",
+      () => {
+        if (image.src !== fallbackSrc) {
+          image.src = fallbackSrc;
+        }
+      },
+      { once: true }
+    );
+  }
 }
 
 function buildOptions(options, selectedValue) {

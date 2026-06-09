@@ -140,15 +140,19 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="图片不存在。")
         thumbnail_path = pipeline_app.create_image_thumbnail(image_path)
         if not thumbnail_path:
-            raise HTTPException(status_code=404, detail="缩略图生成失败。")
-        return FileResponse(thumbnail_path, media_type="image/webp")
+            return FileResponse(image_path, media_type=media_type_for_path(image_path))
+        thumbnail_file = Path(thumbnail_path)
+        return FileResponse(
+            thumbnail_file,
+            media_type=media_type_for_path(thumbnail_file) or "image/webp",
+        )
 
     root = project_root()
     user_dir = root / "platform_frontend" / "user"
     admin_dir = root / "platform_frontend" / "admin"
     if user_dir.exists():
         app.mount("/user", StaticFiles(directory=str(user_dir), html=True), name="user")
-    if admin_dir.exists():
+    if admin_dir.exists() and not CONFIG.desktop_user_only:
         app.mount("/admin", StaticFiles(directory=str(admin_dir), html=True), name="admin")
 
     @app.get("/favicon.ico")

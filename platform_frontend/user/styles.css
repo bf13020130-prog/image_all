@@ -1877,6 +1877,63 @@ body::before {
   grid-column: 1 / -1;
 }
 
+.key-pool {
+  grid-template-columns: 1fr;
+}
+
+.key-pool__bar,
+.key-pool__rows,
+.key-pool-row {
+  grid-column: 1 / -1;
+}
+
+.key-pool__bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.key-pool__add {
+  min-height: 37px;
+}
+
+.key-pool__rows {
+  display: grid;
+  gap: 8px;
+}
+
+.key-pool-row {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(244, 217, 172, 0.12);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.key-pool-row__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  gap: 8px;
+}
+
+.key-pool-row__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.key-pool-row__enabled {
+  margin: 0;
+}
+
+.key-pool-row__remove {
+  min-height: 32px;
+}
+
 .settings-prompt-card {
   position: static;
 }

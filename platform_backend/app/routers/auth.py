@@ -17,6 +17,7 @@ from ..auth import (
     session_token_from_request,
 )
 from ..database import new_id, transaction
+from ..config import CONFIG
 from ..security import hash_password, utc_now
 
 
@@ -75,9 +76,9 @@ def register(payload: RegisterRequest, request: Request, response: Response) -> 
                   user_id, balance, daily_limit, monthly_limit, concurrent_limit,
                   storage_limit_mb, created_at, updated_at
                 )
-                VALUES (?, 0, 0, 0, 20, 10240, ?, ?)
+                VALUES (?, 0, 0, 0, ?, 10240, ?, ?)
                 """,
-                (user_id, now, now),
+                (user_id, CONFIG.default_user_concurrent_limit, now, now),
             )
     except sqlite3.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="账号已存在。") from exc

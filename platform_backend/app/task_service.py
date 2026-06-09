@@ -9,6 +9,7 @@ from typing import Any, Iterator
 from fastapi import HTTPException
 
 from .database import connect, json_dumps, json_loads, new_id, row_to_dict, transaction
+from .config import CONFIG
 from .security import utc_now
 from .settings_service import effective_settings_for_user
 from .storage_service import delete_job_storage, storage_used_by_user
@@ -242,9 +243,9 @@ def get_user_quota(user_id: str) -> dict[str, Any]:
               user_id, balance, daily_limit, monthly_limit, concurrent_limit,
               storage_limit_mb, created_at, updated_at
             )
-            VALUES (?, 0, 0, 0, 20, 10240, ?, ?)
+            VALUES (?, 0, 0, 0, ?, 10240, ?, ?)
             """,
-            (user_id, now, now),
+            (user_id, CONFIG.default_user_concurrent_limit, now, now),
         )
     return get_user_quota(user_id)
 
@@ -322,7 +323,7 @@ def request_slot(
     safe_poll_seconds = max(0.1, float(poll_seconds or 0.5))
     while True:
         quota = get_user_quota(user_id)
-        capacity = max(1, int(quota.get("concurrent_limit") or 20))
+        capacity = max(1, int(quota.get("concurrent_limit") or CONFIG.default_user_concurrent_limit))
         now = utc_now()
         acquired = False
         with transaction() as conn:
@@ -479,6 +480,36 @@ def get_job(job_id: str, *, user_id: str | None = None) -> dict[str, Any] | None
         row = conn.execute(f"SELECT * FROM jobs WHERE {where}", params).fetchone()
     job = row_to_dict(row)
     return _public_job(job) if job else None
+
+
+def delete_job(job_id: str, *, user_id: str | None = None) -> dict[str, Any]:
+    params: list[Any] = [job_id]
+    where = "id = ?"
+    if user_id:
+        where += " AND user_id = ?"
+        params.append(user_id)
+    with connect() as conn:
+        row = conn.execute(f"SELECT * FROM jobs WHERE {where}", params).fetchone()
+    job = row_to_dict(row)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在。")
+    if job.get("status") in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="任务正在排队或运行，不能删除。")
+
+    storage_deleted = False
+    try:
+        storage_deleted = delete_job_storage(str(job["user_id"]), str(job["id"]))
+    except Exception:
+        storage_deleted = False
+
+    with transaction() as conn:
+        conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+    return {
+        "status": "deleted",
+        "job": _public_job(job),
+        "deleted_storage": storage_deleted,
+    }
 
 
 def list_job_events(job_id: str, *, user_id: str | None = None) -> list[dict[str, Any]]:

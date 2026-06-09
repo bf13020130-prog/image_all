@@ -17,6 +17,7 @@ from ..legacy_contract import (
     serialize_job as serialize_legacy_job,
 )
 from ..settings_service import (
+    POOL_SECRET_KEYS,
     get_user_secrets,
     get_user_settings,
     public_settings_for_user,
@@ -44,7 +45,7 @@ router = APIRouter(prefix="/api", tags=["legacy-web"])
 def _shared_pool(user_id: str) -> dict[str, int | str]:
     settings = public_settings_for_user(user_id)["effective"]
     quota = get_user_quota(user_id)
-    capacity = max(1, int(quota.get("concurrent_limit") or 20))
+    capacity = max(1, int(quota.get("concurrent_limit") or CONFIG.default_user_concurrent_limit))
     used = min(capacity, count_active_request_slots(user_id))
     task_concurrency = max(1, int(settings.get("default_concurrency") or 1))
     worker_capacity = max(1, int(CONFIG.worker_concurrency))
@@ -316,6 +317,7 @@ def _settings_for_legacy_form(user_id: str) -> dict[str, Any]:
     defaults = payload["defaults"]
     effective = payload["effective"]
     secret_keys = set(payload["secret_keys"])
+    pool_secret_keys = set(POOL_SECRET_KEYS)
     user_secrets = get_user_secrets(user_id, reveal=True)
     settings = dict(defaults)
     settings.update(
@@ -326,7 +328,9 @@ def _settings_for_legacy_form(user_id: str) -> dict[str, Any]:
         }
     )
     for key in secret_keys:
-        settings[key] = user_secrets.get(key, "")
+        settings[key] = user_secrets.get(key, [] if key in pool_secret_keys else "")
+    settings["desktop_mode"] = CONFIG.desktop_mode
+    settings["desktop_user_only"] = CONFIG.desktop_user_only
     settings["_secret_keys"] = list(payload["secret_keys"])
     settings["_secret_status"] = payload.get("secret_status", {})
     return settings
@@ -390,6 +394,7 @@ def update_settings(
 ) -> dict[str, Any]:
     settings_payload = public_settings_for_user(user["id"])
     secret_keys = set(settings_payload["secret_keys"])
+    pool_secret_keys = set(POOL_SECRET_KEYS)
     current_user_settings = get_user_settings(user["id"])
     settings = {
         **current_user_settings,
@@ -399,11 +404,16 @@ def update_settings(
             if key not in secret_keys and value not in ("", None)
         },
     }
-    secrets = {
-        key: value
-        for key, value in payload.items()
-        if key in secret_keys and value and not _looks_like_masked_secret(value)
-    }
+    secrets: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key not in secret_keys:
+            continue
+        if key in pool_secret_keys:
+            if isinstance(value, list):
+                secrets[key] = value
+            continue
+        if value and not _looks_like_masked_secret(value):
+            secrets[key] = value
     save_user_settings(user["id"], settings)
     if secrets:
         save_user_secrets(user["id"], secrets)

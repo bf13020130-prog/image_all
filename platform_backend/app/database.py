@@ -99,8 +99,7 @@ def bootstrap_admin() -> None:
                 user_id, balance, daily_limit, monthly_limit, concurrent_limit,
                 storage_limit_mb, created_at, updated_at
             )
-            VALUES (?, 0, 0, 0, 3, 20480, ?, ?)
+            VALUES (?, 0, 0, 0, ?, 20480, ?, ?)
             """,
-            (user_id, now, now),
+            (user_id, CONFIG.default_user_concurrent_limit, now, now),
         )
-

@@ -928,9 +928,13 @@ class Settings:
     llm_api_base: str = DEFAULT_API_BASE
     llm_api_key: str = "replace-me"
     chat_model: str = DEFAULT_CHAT_MODEL
+    llm_endpoint_type: str = LLM_ENDPOINT_CHAT_COMPLETIONS
+    llm_key_pool: list[dict[str, Any]] = field(default_factory=list)
+    default_llm_key_id: str = ""
     color_match_api_base: str = DEFAULT_API_BASE
     color_match_api_key: str = "replace-me"
     color_match_model: str = DEFAULT_COLOR_MATCH_MODEL
+    color_match_endpoint_type: str = LLM_ENDPOINT_CHAT_COMPLETIONS
     image_agent_api_base: str = DEFAULT_API_BASE
     image_agent_api_key: str = "replace-me"
     image_agent_model: str = DEFAULT_IMAGE_AGENT_MODEL
@@ -953,8 +957,14 @@ class Settings:
     gpt_image_api_key: str = "replace-me"
     gpt_image_1k_api_base: str = DEFAULT_API_BASE
     gpt_image_1k_api_key: str = ""
+    gpt_image_key_pool: list[dict[str, Any]] = field(default_factory=list)
+    default_gpt_image_key_id: str = ""
+    gpt_image_1k_key_pool: list[dict[str, Any]] = field(default_factory=list)
+    default_gpt_image_1k_key_id: str = ""
     gemini_image_api_base: str = DEFAULT_API_BASE
     gemini_image_api_key: str = ""
+    gemini_image_key_pool: list[dict[str, Any]] = field(default_factory=list)
+    default_gemini_image_key_id: str = ""
     image_model: str = DEFAULT_IMAGE_MODEL
     image_model_gpt_image_2: str = DEFAULT_IMAGE_MODEL_GPT_IMAGE_2_ID
     image_model_gpt_image_2_1k: str = DEFAULT_IMAGE_MODEL_GPT_IMAGE_2_ID
@@ -973,6 +983,16 @@ class Settings:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Settings":
         payload = payload or {}
+        has_explicit_llm_pool = isinstance(payload.get("llm_key_pool"), list)
+        has_explicit_gpt_pool = isinstance(payload.get("gpt_image_key_pool"), list)
+        has_explicit_gpt_1k_pool = isinstance(
+            payload.get("gpt_image_1k_key_pool"),
+            list,
+        )
+        has_explicit_gemini_pool = isinstance(
+            payload.get("gemini_image_key_pool"),
+            list,
+        )
         merged = cls().to_dict()
         allowed_keys = {item.name for item in fields(cls)}
         legacy_api_base = payload.get(
@@ -1102,6 +1122,12 @@ class Settings:
         merged["color_match_model"] = (
             str(merged["color_match_model"]).strip() or DEFAULT_COLOR_MATCH_MODEL
         )
+        merged["llm_endpoint_type"] = normalize_llm_endpoint_type(
+            merged.get("llm_endpoint_type")
+        )
+        merged["color_match_endpoint_type"] = normalize_llm_endpoint_type(
+            merged.get("color_match_endpoint_type")
+        )
         merged["image_agent_model"] = (
             str(merged["image_agent_model"]).strip() or DEFAULT_IMAGE_AGENT_MODEL
         )
@@ -1144,6 +1170,183 @@ class Settings:
             or merged["image_model_gpt_image_2"]
             or DEFAULT_IMAGE_MODEL_GPT_IMAGE_2_ID
         )
+        merged["chat_model"] = (
+            str(merged["chat_model"]).strip() or DEFAULT_CHAT_MODEL
+        )
+        llm_pool = normalize_key_pool(
+            merged.get("llm_key_pool"),
+            kind="llm",
+            fallback_api_base=merged["llm_api_base"],
+            fallback_model=merged["chat_model"],
+            fallback_endpoint_type=merged["llm_endpoint_type"],
+        )
+        if not llm_pool:
+            if has_explicit_llm_pool:
+                merged["llm_api_key"] = ""
+                merged["color_match_api_key"] = ""
+                merged["image_agent_api_key"] = ""
+            else:
+                for item in (
+                    single_llm_pool_item(
+                        name="通用大模型 Key 1",
+                        api_base=merged["llm_api_base"],
+                        api_key=merged["llm_api_key"],
+                        model=merged["chat_model"],
+                        endpoint_type=merged["llm_endpoint_type"],
+                    ),
+                    single_llm_pool_item(
+                        name="追色大模型 Key",
+                        api_base=merged["color_match_api_base"],
+                        api_key=merged["color_match_api_key"],
+                        model=merged["color_match_model"],
+                        endpoint_type=merged["color_match_endpoint_type"],
+                    ),
+                    single_llm_pool_item(
+                        name="Agent 大模型 Key",
+                        api_base=merged["image_agent_api_base"],
+                        api_key=merged["image_agent_api_key"],
+                        model=merged["image_agent_model"],
+                        endpoint_type=merged["image_agent_endpoint_type"],
+                    ),
+                ):
+                    if item and item["id"] not in {entry["id"] for entry in llm_pool}:
+                        llm_pool.append(item)
+        merged["llm_key_pool"] = llm_pool
+        merged["default_llm_key_id"] = pool_default_id(
+            llm_pool,
+            merged.get("default_llm_key_id"),
+        )
+        default_llm = default_pool_item(llm_pool, merged["default_llm_key_id"])
+        if default_llm:
+            merged["llm_api_base"] = str(
+                default_llm.get("api_base") or DEFAULT_API_BASE
+            ).rstrip("/")
+            merged["llm_api_key"] = str(default_llm.get("api_key") or "").strip()
+            merged["chat_model"] = (
+                str(default_llm.get("model") or "").strip() or DEFAULT_CHAT_MODEL
+            )
+            merged["llm_endpoint_type"] = normalize_llm_endpoint_type(
+                default_llm.get("endpoint_type")
+            )
+            merged["color_match_api_base"] = merged["llm_api_base"]
+            merged["color_match_api_key"] = merged["llm_api_key"]
+            merged["color_match_model"] = merged["chat_model"]
+            merged["color_match_endpoint_type"] = merged["llm_endpoint_type"]
+            merged["image_agent_api_base"] = merged["llm_api_base"]
+            merged["image_agent_api_key"] = merged["llm_api_key"]
+            merged["image_agent_model"] = merged["chat_model"]
+            merged["image_agent_endpoint_type"] = merged["llm_endpoint_type"]
+
+        gpt_pool = normalize_key_pool(
+            merged.get("gpt_image_key_pool"),
+            kind="gpt_image",
+            fallback_api_base=merged["gpt_image_api_base"],
+        )
+        if not gpt_pool:
+            if has_explicit_gpt_pool:
+                merged["gpt_image_api_key"] = ""
+                merged["image_api_key"] = ""
+            else:
+                item = single_image_pool_item(
+                    name="gpt-image-2 2K/4K Key 1",
+                    prefix="gpt_image",
+                    api_base=merged["gpt_image_api_base"],
+                    api_key=merged["gpt_image_api_key"],
+                )
+                if item:
+                    gpt_pool.append(item)
+        merged["gpt_image_key_pool"] = gpt_pool
+        merged["default_gpt_image_key_id"] = pool_default_id(
+            gpt_pool,
+            merged.get("default_gpt_image_key_id"),
+        )
+        default_gpt = default_pool_item(gpt_pool, merged["default_gpt_image_key_id"])
+        if default_gpt:
+            merged["gpt_image_api_base"] = str(
+                default_gpt.get("api_base") or DEFAULT_API_BASE
+            ).rstrip("/")
+            merged["gpt_image_api_key"] = str(default_gpt.get("api_key") or "").strip()
+
+        gpt_1k_pool = normalize_key_pool(
+            merged.get("gpt_image_1k_key_pool"),
+            kind="gpt_image_1k",
+            fallback_api_base=merged["gpt_image_1k_api_base"],
+        )
+        if not gpt_1k_pool:
+            if has_explicit_gpt_1k_pool:
+                merged["gpt_image_1k_api_key"] = ""
+                merged["image_1k_api_key"] = ""
+            else:
+                item = single_image_pool_item(
+                    name="gpt-image-2 1K Key 1",
+                    prefix="gpt_image_1k",
+                    api_base=merged["gpt_image_1k_api_base"],
+                    api_key=merged["gpt_image_1k_api_key"],
+                )
+                if item:
+                    gpt_1k_pool.append(item)
+        merged["gpt_image_1k_key_pool"] = gpt_1k_pool
+        merged["default_gpt_image_1k_key_id"] = pool_default_id(
+            gpt_1k_pool,
+            merged.get("default_gpt_image_1k_key_id"),
+        )
+        default_gpt_1k = default_pool_item(
+            gpt_1k_pool,
+            merged["default_gpt_image_1k_key_id"],
+        )
+        if default_gpt_1k:
+            merged["gpt_image_1k_api_base"] = str(
+                default_gpt_1k.get("api_base")
+                or merged["gpt_image_api_base"]
+                or DEFAULT_API_BASE
+            ).rstrip("/")
+            merged["gpt_image_1k_api_key"] = str(
+                default_gpt_1k.get("api_key") or ""
+            ).strip()
+
+        gemini_pool = normalize_key_pool(
+            merged.get("gemini_image_key_pool"),
+            kind="gemini_image",
+            fallback_api_base=merged["gemini_image_api_base"],
+            fallback_model=merged["image_model"]
+            if is_nano_banana_model(merged["image_model"])
+            else IMAGE_MODEL_NANO_BANANA_2,
+        )
+        if not gemini_pool:
+            if has_explicit_gemini_pool:
+                merged["gemini_image_api_key"] = ""
+            else:
+                item = single_image_pool_item(
+                    name="Banana / Gemini Key 1",
+                    prefix="gemini_image",
+                    api_base=merged["gemini_image_api_base"],
+                    api_key=merged["gemini_image_api_key"],
+                    model=merged["image_model"]
+                    if is_nano_banana_model(merged["image_model"])
+                    else IMAGE_MODEL_NANO_BANANA_2,
+                )
+                if item:
+                    gemini_pool.append(item)
+        merged["gemini_image_key_pool"] = gemini_pool
+        merged["default_gemini_image_key_id"] = pool_default_id(
+            gemini_pool,
+            merged.get("default_gemini_image_key_id"),
+        )
+        default_gemini = default_pool_item(
+            gemini_pool,
+            merged["default_gemini_image_key_id"],
+        )
+        if default_gemini:
+            merged["gemini_image_api_base"] = str(
+                default_gemini.get("api_base") or DEFAULT_API_BASE
+            ).rstrip("/")
+            merged["gemini_image_api_key"] = str(
+                default_gemini.get("api_key") or ""
+            ).strip()
+
+        merged["image_api_base"] = merged["gpt_image_api_base"]
+        merged["image_api_key"] = merged["gpt_image_api_key"]
+        merged["image_1k_api_key"] = merged["gpt_image_1k_api_key"]
         merged["llm_connect_timeout_seconds"] = int(
             merged["llm_connect_timeout_seconds"]
         )
@@ -1171,9 +1374,13 @@ class Settings:
             "llm_api_base": self.llm_api_base,
             "llm_api_key": self.llm_api_key,
             "chat_model": self.chat_model,
+            "llm_endpoint_type": self.llm_endpoint_type,
+            "llm_key_pool": self.llm_key_pool,
+            "default_llm_key_id": self.default_llm_key_id,
             "color_match_api_base": self.color_match_api_base,
             "color_match_api_key": self.color_match_api_key,
             "color_match_model": self.color_match_model,
+            "color_match_endpoint_type": self.color_match_endpoint_type,
             "image_agent_api_base": self.image_agent_api_base,
             "image_agent_api_key": self.image_agent_api_key,
             "image_agent_model": self.image_agent_model,
@@ -1196,8 +1403,14 @@ class Settings:
             "gpt_image_api_key": self.gpt_image_api_key,
             "gpt_image_1k_api_base": self.gpt_image_1k_api_base,
             "gpt_image_1k_api_key": self.gpt_image_1k_api_key,
+            "gpt_image_key_pool": self.gpt_image_key_pool,
+            "default_gpt_image_key_id": self.default_gpt_image_key_id,
+            "gpt_image_1k_key_pool": self.gpt_image_1k_key_pool,
+            "default_gpt_image_1k_key_id": self.default_gpt_image_1k_key_id,
             "gemini_image_api_base": self.gemini_image_api_base,
             "gemini_image_api_key": self.gemini_image_api_key,
+            "gemini_image_key_pool": self.gemini_image_key_pool,
+            "default_gemini_image_key_id": self.default_gemini_image_key_id,
             "image_model": self.image_model,
             "image_model_gpt_image_2": self.image_model_gpt_image_2,
             "image_model_gpt_image_2_1k": self.image_model_gpt_image_2_1k,
@@ -1227,6 +1440,16 @@ class Settings:
         payload["gemini_image_api_key"] = mask_secret(self.gemini_image_api_key)
         payload["image_api_key"] = mask_secret(self.gpt_image_api_key)
         payload["image_1k_api_key"] = mask_secret(self.gpt_image_1k_api_key)
+        payload["llm_key_pool"] = pool_with_public_secrets(self.llm_key_pool)
+        payload["gpt_image_key_pool"] = pool_with_public_secrets(
+            self.gpt_image_key_pool
+        )
+        payload["gpt_image_1k_key_pool"] = pool_with_public_secrets(
+            self.gpt_image_1k_key_pool
+        )
+        payload["gemini_image_key_pool"] = pool_with_public_secrets(
+            self.gemini_image_key_pool
+        )
         return payload
 
 
@@ -1599,6 +1822,238 @@ def resolve_secret_value(value: Any) -> str:
     return cleaned
 
 
+def is_masked_secret_value(value: Any) -> bool:
+    text = str(value or "").strip()
+    return bool(text) and ("***" in text or set(text) == {"*"})
+
+
+def pool_default_id(items: list[dict[str, Any]], current_default_id: Any) -> str:
+    wanted = str(current_default_id or "").strip()
+    if wanted and any(str(item.get("id") or "") == wanted for item in items):
+        return wanted
+    enabled = [
+        item
+        for item in items
+        if parse_bool_setting(item.get("enabled"), default=True)
+        and bool(resolve_secret_value(item.get("api_key")))
+    ]
+    first = (enabled or items or [{}])[0]
+    return str(first.get("id") or "").strip()
+
+
+def default_pool_item(
+    items: list[dict[str, Any]],
+    default_id: Any,
+) -> dict[str, Any] | None:
+    candidates = sort_pool_candidates(items, str(default_id or ""))
+    if candidates:
+        return candidates[0]
+    wanted = str(default_id or "").strip()
+    if wanted:
+        for item in items:
+            if str(item.get("id") or "") == wanted:
+                return item
+    return items[0] if items else None
+
+
+def stable_pool_item_id(prefix: str, *parts: Any) -> str:
+    seed = "|".join(str(part or "").strip() for part in parts)
+    digest = uuid.uuid5(uuid.NAMESPACE_URL, f"imag-replicate2:{prefix}:{seed}").hex[:12]
+    return f"{prefix}_{digest}"
+
+
+def normalize_llm_key_pool_item(
+    item: Any,
+    *,
+    index: int,
+    fallback_api_base: str,
+    fallback_model: str,
+    fallback_endpoint_type: str,
+) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    api_base = str(item.get("api_base") or fallback_api_base or DEFAULT_API_BASE).rstrip("/")
+    api_key = str(item.get("api_key") or "").strip()
+    model = str(item.get("model") or fallback_model or DEFAULT_CHAT_MODEL).strip()
+    endpoint_type = normalize_llm_endpoint_type(
+        item.get("endpoint_type") or fallback_endpoint_type
+    )
+    item_id = str(item.get("id") or "").strip() or stable_pool_item_id(
+        "llm",
+        item.get("name") or index,
+        api_base,
+        model,
+        endpoint_type,
+    )
+    return {
+        "id": item_id,
+        "name": str(item.get("name") or f"大模型 Key {index}").strip(),
+        "api_base": api_base or DEFAULT_API_BASE,
+        "api_key": api_key,
+        "model": model or DEFAULT_CHAT_MODEL,
+        "endpoint_type": endpoint_type,
+        "enabled": parse_bool_setting(item.get("enabled"), default=True),
+    }
+
+
+def normalize_image_key_pool_item(
+    item: Any,
+    *,
+    index: int,
+    prefix: str,
+    fallback_api_base: str,
+    fallback_model: str = "",
+) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    api_base = str(item.get("api_base") or fallback_api_base or DEFAULT_API_BASE).rstrip("/")
+    api_key = str(item.get("api_key") or "").strip()
+    model = str(item.get("model") or fallback_model or "").strip()
+    if model:
+        try:
+            model = normalize_image_model(model)
+        except AppError:
+            model = normalize_configured_image_model_id(model) or model
+    item_id = str(item.get("id") or "").strip() or stable_pool_item_id(
+        prefix,
+        item.get("name") or index,
+        api_base,
+        model,
+    )
+    normalized = {
+        "id": item_id,
+        "name": str(item.get("name") or f"生图 Key {index}").strip(),
+        "api_base": api_base or DEFAULT_API_BASE,
+        "api_key": api_key,
+        "enabled": parse_bool_setting(item.get("enabled"), default=True),
+    }
+    if model:
+        normalized["model"] = model
+    return normalized
+
+
+def normalize_key_pool(
+    value: Any,
+    *,
+    kind: str,
+    fallback_api_base: str,
+    fallback_model: str = "",
+    fallback_endpoint_type: str = LLM_ENDPOINT_CHAT_COMPLETIONS,
+) -> list[dict[str, Any]]:
+    items = value if isinstance(value, list) else []
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, item in enumerate(items, start=1):
+        if kind == "llm":
+            normalized_item = normalize_llm_key_pool_item(
+                item,
+                index=index,
+                fallback_api_base=fallback_api_base,
+                fallback_model=fallback_model,
+                fallback_endpoint_type=fallback_endpoint_type,
+            )
+        else:
+            normalized_item = normalize_image_key_pool_item(
+                item,
+                index=index,
+                prefix=kind,
+                fallback_api_base=fallback_api_base,
+                fallback_model=fallback_model,
+            )
+        if not normalized_item:
+            continue
+        item_id = str(normalized_item["id"])
+        if item_id in seen_ids:
+            normalized_item["id"] = f"{item_id}_{index}"
+        seen_ids.add(str(normalized_item["id"]))
+        normalized.append(normalized_item)
+    return normalized
+
+
+def single_llm_pool_item(
+    *,
+    name: str,
+    api_base: Any,
+    api_key: Any,
+    model: Any,
+    endpoint_type: Any,
+) -> dict[str, Any] | None:
+    if not resolve_secret_value(api_key):
+        return None
+    return normalize_llm_key_pool_item(
+        {
+            "name": name,
+            "api_base": api_base,
+            "api_key": api_key,
+            "model": model,
+            "endpoint_type": endpoint_type,
+            "enabled": True,
+        },
+        index=1,
+        fallback_api_base=str(api_base or DEFAULT_API_BASE),
+        fallback_model=str(model or DEFAULT_CHAT_MODEL),
+        fallback_endpoint_type=normalize_llm_endpoint_type(endpoint_type),
+    )
+
+
+def single_image_pool_item(
+    *,
+    name: str,
+    prefix: str,
+    api_base: Any,
+    api_key: Any,
+    model: Any = "",
+) -> dict[str, Any] | None:
+    if not resolve_secret_value(api_key):
+        return None
+    return normalize_image_key_pool_item(
+        {
+            "name": name,
+            "api_base": api_base,
+            "api_key": api_key,
+            "model": model,
+            "enabled": True,
+        },
+        index=1,
+        prefix=prefix,
+        fallback_api_base=str(api_base or DEFAULT_API_BASE),
+        fallback_model=str(model or ""),
+    )
+
+
+def pool_item_public_copy(item: dict[str, Any]) -> dict[str, Any]:
+    public_item = dict(item)
+    public_item["api_key"] = mask_secret(str(public_item.get("api_key") or ""))
+    return public_item
+
+
+def pool_with_public_secrets(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [pool_item_public_copy(item) for item in items]
+
+
+def enabled_pool_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in items
+        if parse_bool_setting(item.get("enabled"), default=True)
+        and bool(resolve_secret_value(item.get("api_key")))
+    ]
+
+
+def sort_pool_candidates(
+    items: list[dict[str, Any]],
+    default_id: str,
+) -> list[dict[str, Any]]:
+    candidates = enabled_pool_items(items)
+    if not candidates:
+        return []
+    wanted = str(default_id or "").strip()
+    return sorted(
+        candidates,
+        key=lambda item: 0 if wanted and str(item.get("id")) == wanted else 1,
+    )
+
+
 def parse_bool_setting(value: Any, *, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -1619,9 +2074,11 @@ SEED_BACKFILL_KEYS = (
     "llm_api_base",
     "llm_api_key",
     "chat_model",
+    "llm_endpoint_type",
     "color_match_api_base",
     "color_match_api_key",
     "color_match_model",
+    "color_match_endpoint_type",
     "image_agent_api_base",
     "image_agent_api_key",
     "image_agent_model",
@@ -1641,8 +2098,10 @@ SEED_BACKFILL_KEYS = (
 SEED_REPLACE_DEFAULT_VALUES = {
     "llm_api_base": DEFAULT_API_BASE,
     "chat_model": DEFAULT_CHAT_MODEL,
+    "llm_endpoint_type": LLM_ENDPOINT_CHAT_COMPLETIONS,
     "color_match_api_base": DEFAULT_API_BASE,
     "color_match_model": DEFAULT_COLOR_MATCH_MODEL,
+    "color_match_endpoint_type": LLM_ENDPOINT_CHAT_COMPLETIONS,
     "image_agent_api_base": DEFAULT_API_BASE,
     "image_agent_model": DEFAULT_IMAGE_AGENT_MODEL,
     "gpt_image_1k_api_base": DEFAULT_API_BASE,
@@ -2514,17 +2973,13 @@ def image_agent_allowed_resolutions_for_settings(
 ) -> list[str]:
     model = normalize_image_model(image_model)
     if is_nano_banana_model(model):
-        if resolve_secret_value(settings.gemini_image_api_key):
+        if gemini_image_key_candidates(settings):
             return image_agent_allowed_resolutions(model)
         return []
     allowed: list[str] = []
-    if resolve_secret_value(settings.gpt_image_1k_api_key) or resolve_secret_value(
-        settings.image_1k_api_key
-    ):
+    if gpt_image_key_candidates(settings, "1k"):
         allowed.append("1k")
-    if resolve_secret_value(settings.gpt_image_api_key) or resolve_secret_value(
-        settings.image_api_key
-    ):
+    if gpt_image_key_candidates(settings, "2k"):
         allowed.extend(["2k", "4k"])
     return allowed
 
@@ -3438,6 +3893,18 @@ def image_agent_endpoint_url(settings: Settings) -> str:
     return f"{settings.image_agent_api_base}{suffix}"
 
 
+def llm_endpoint_suffix(endpoint_type: str) -> str:
+    return (
+        "/v1/responses"
+        if normalize_llm_endpoint_type(endpoint_type) == LLM_ENDPOINT_RESPONSES
+        else "/v1/chat/completions"
+    )
+
+
+def llm_endpoint_url(api_base: str, endpoint_type: str) -> str:
+    return f"{str(api_base or DEFAULT_API_BASE).rstrip('/')}{llm_endpoint_suffix(endpoint_type)}"
+
+
 def chat_content_part_to_response_part(item: Any) -> Any:
     if not isinstance(item, dict):
         return item
@@ -3556,6 +4023,105 @@ def is_tool_call_compat_error(error: AppError) -> bool:
     )
 
 
+FAILOVER_HTTP_STATUS_CODES = RETRYABLE_STATUS_CODES | {401, 403}
+FAILOVER_NETWORK_ERROR_MARKERS = (
+    "timed out",
+    "timeout",
+    "connection reset",
+    "connection aborted",
+    "remote disconnected",
+    "temporarily unavailable",
+    "temporary failure",
+    "name resolution",
+    "dns",
+    "ssl",
+    "tls",
+    "network",
+    "max retries exceeded",
+)
+FAILOVER_PROVIDER_ERROR_MARKERS = (
+    "invalid api key",
+    "invalid_api_key",
+    "incorrect api key",
+    "unauthorized",
+    "forbidden",
+    "permission denied",
+    "rate limit",
+    "rate_limit",
+    "quota",
+    "insufficient_quota",
+    "billing",
+    "credit",
+    "balance",
+)
+NON_FAILOVER_ERROR_MARKERS = (
+    "unsupported parameter",
+    "unknown parameter",
+    "不支持的分辨率",
+    "不支持的画幅",
+    "不支持比例",
+    "必须选择",
+    "参数",
+)
+
+
+def failover_http_status_code(error: Exception) -> int | None:
+    match = re.search(r"HTTP\s+(\d{3})", str(error), flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def is_failover_retryable_error(error: Exception) -> bool:
+    text = str(error or "")
+    lowered = text.lower()
+    if any(marker in lowered for marker in NON_FAILOVER_ERROR_MARKERS):
+        return False
+    status_code = failover_http_status_code(error)
+    if status_code is not None:
+        return status_code in FAILOVER_HTTP_STATUS_CODES or any(
+            marker in lowered for marker in FAILOVER_PROVIDER_ERROR_MARKERS
+        )
+    return any(marker in lowered for marker in FAILOVER_NETWORK_ERROR_MARKERS) or any(
+        marker in lowered for marker in FAILOVER_PROVIDER_ERROR_MARKERS
+    )
+
+
+def keyed_log_path(path: Path, attempt_index: int) -> Path:
+    if attempt_index <= 1:
+        return path
+    return path.with_name(f"{path.stem}.key{attempt_index}{path.suffix}")
+
+
+def llm_key_candidates(settings: Settings) -> list[dict[str, Any]]:
+    candidates = sort_pool_candidates(settings.llm_key_pool, settings.default_llm_key_id)
+    if candidates:
+        return candidates
+    if settings.llm_key_pool:
+        return []
+    fallback = single_llm_pool_item(
+        name="通用大模型 Key 1",
+        api_base=settings.llm_api_base,
+        api_key=settings.llm_api_key,
+        model=settings.chat_model,
+        endpoint_type=settings.llm_endpoint_type,
+    )
+    return [fallback] if fallback else []
+
+
+def has_llm_api_key(settings: Settings) -> bool:
+    return bool(llm_key_candidates(settings))
+
+
+def candidate_key_label(item: dict[str, Any], fallback: str) -> str:
+    name = str(item.get("name") or "").strip()
+    item_id = str(item.get("id") or "").strip()
+    return name or item_id or fallback
+
+
 def request_image_agent_chat(
     url: str,
     payload: dict[str, Any],
@@ -3611,6 +4177,128 @@ def request_image_agent_chat(
         )
 
 
+def request_llm_with_key_pool(
+    settings: Settings,
+    payload: dict[str, Any],
+    *,
+    connect_timeout_seconds: int,
+    read_timeout_seconds: int,
+    retry_count: int,
+    logger: AppLogger,
+    label: str,
+    request_log_path: Path,
+    response_log_path: Path,
+    use_tool_fallback: bool = False,
+) -> Any:
+    candidates = llm_key_candidates(settings)
+    if not candidates:
+        raise AppError("请先在设置页填写至少一个可用的大模型 API Key。")
+    last_error: AppError | None = None
+    for attempt_index, candidate in enumerate(candidates, start=1):
+        api_key = resolve_secret_value(candidate.get("api_key"))
+        if not api_key:
+            continue
+        candidate_payload = dict(payload)
+        candidate_payload["model"] = (
+            str(candidate.get("model") or "").strip()
+            or str(payload.get("model") or "").strip()
+            or DEFAULT_CHAT_MODEL
+        )
+        endpoint_type = normalize_llm_endpoint_type(candidate.get("endpoint_type"))
+        api_base = str(candidate.get("api_base") or DEFAULT_API_BASE).rstrip("/")
+        key_label = candidate_key_label(candidate, f"key{attempt_index}")
+        attempt_label = label if attempt_index == 1 else f"{label} key{attempt_index}"
+        try:
+            logger.log(f"{label}: 使用大模型 Key {key_label}")
+            if use_tool_fallback:
+                request_payload = (
+                    responses_payload_from_chat_payload(candidate_payload)
+                    if endpoint_type == LLM_ENDPOINT_RESPONSES
+                    else dict(candidate_payload)
+                )
+                request_payload["_endpoint_type"] = endpoint_type
+                logger.log(
+                    f"{attempt_label}: 使用 {llm_endpoint_suffix(endpoint_type)}"
+                )
+                return request_image_agent_chat(
+                    llm_endpoint_url(api_base, endpoint_type),
+                    payload=request_payload,
+                    api_key=api_key,
+                    connect_timeout_seconds=connect_timeout_seconds,
+                    read_timeout_seconds=read_timeout_seconds,
+                    retry_count=retry_count,
+                    logger=logger,
+                    label=attempt_label,
+                    request_log_path=keyed_log_path(request_log_path, attempt_index),
+                    response_log_path=keyed_log_path(response_log_path, attempt_index),
+                    use_system_proxy=settings.use_system_proxy,
+                )
+            return request_configured_llm(
+                api_base=api_base,
+                endpoint_type=endpoint_type,
+                payload=candidate_payload,
+                api_key=api_key,
+                connect_timeout_seconds=connect_timeout_seconds,
+                read_timeout_seconds=read_timeout_seconds,
+                retry_count=retry_count,
+                logger=logger,
+                label=attempt_label,
+                request_log_path=keyed_log_path(request_log_path, attempt_index),
+                response_log_path=keyed_log_path(response_log_path, attempt_index),
+                use_system_proxy=settings.use_system_proxy,
+            )
+        except AppError as exc:
+            last_error = exc
+            if attempt_index >= len(candidates) or not is_failover_retryable_error(exc):
+                raise
+            logger.log(
+                f"{label}: Key {key_label} 失败，自动切换下一个 Key：{exc}"
+            )
+            continue
+    if last_error is not None:
+        raise last_error
+    raise AppError("请先在设置页填写至少一个可用的大模型 API Key。")
+
+
+def request_configured_llm(
+    *,
+    api_base: str,
+    endpoint_type: str,
+    payload: dict[str, Any],
+    api_key: str,
+    connect_timeout_seconds: int,
+    read_timeout_seconds: int,
+    retry_count: int,
+    logger: AppLogger,
+    label: str,
+    request_log_path: Path,
+    response_log_path: Path,
+    use_system_proxy: bool = False,
+) -> Any:
+    normalized_endpoint_type = normalize_llm_endpoint_type(endpoint_type)
+    url = llm_endpoint_url(api_base, normalized_endpoint_type)
+    if normalized_endpoint_type == LLM_ENDPOINT_RESPONSES:
+        request_payload = responses_payload_from_chat_payload(payload)
+        logger.log(f"{label}: 使用 /v1/responses")
+    else:
+        request_payload = dict(payload)
+        logger.log(f"{label}: 使用 /v1/chat/completions")
+    return request_json(
+        url,
+        request_payload,
+        api_key=api_key,
+        idempotency_key=None,
+        connect_timeout_seconds=connect_timeout_seconds,
+        read_timeout_seconds=read_timeout_seconds,
+        retry_count=retry_count,
+        logger=logger,
+        label=label,
+        request_log_path=request_log_path,
+        response_log_path=response_log_path,
+        use_system_proxy=use_system_proxy,
+    )
+
+
 def request_image_agent_llm(
     settings: Settings,
     payload: dict[str, Any],
@@ -3624,20 +4312,9 @@ def request_image_agent_llm(
     request_log_path: Path,
     response_log_path: Path,
 ) -> Any:
-    endpoint_type = normalize_llm_endpoint_type(settings.image_agent_endpoint_type)
-    url = image_agent_endpoint_url(settings)
-    if endpoint_type == LLM_ENDPOINT_RESPONSES:
-        payload = responses_payload_from_chat_payload(payload)
-        payload["_endpoint_type"] = LLM_ENDPOINT_RESPONSES
-        logger.log(f"{label}: 使用 /v1/responses")
-    else:
-        payload = dict(payload)
-        payload["_endpoint_type"] = LLM_ENDPOINT_CHAT_COMPLETIONS
-        logger.log(f"{label}: 使用 /v1/chat/completions")
-    return request_image_agent_chat(
-        url,
+    return request_llm_with_key_pool(
+        settings,
         payload,
-        api_key=api_key,
         connect_timeout_seconds=connect_timeout_seconds,
         read_timeout_seconds=read_timeout_seconds,
         retry_count=retry_count,
@@ -3645,7 +4322,7 @@ def request_image_agent_llm(
         label=label,
         request_log_path=request_log_path,
         response_log_path=response_log_path,
-        use_system_proxy=settings.use_system_proxy,
+        use_tool_fallback=True,
     )
 
 
@@ -4552,7 +5229,13 @@ def gpt_image_api_base(settings: Settings) -> str:
     ).rstrip("/")
 
 
-def gpt_image_request_api_base(settings: Settings, output_resolution: Any) -> str:
+def gpt_image_request_api_base(
+    settings: Settings,
+    output_resolution: Any,
+    api_base: str | None = None,
+) -> str:
+    if api_base:
+        return str(api_base).rstrip("/")
     resolution = normalize_output_resolution(output_resolution)
     if resolution == "1k":
         return str(
@@ -4564,21 +5247,174 @@ def gpt_image_request_api_base(settings: Settings, output_resolution: Any) -> st
     return gpt_image_api_base(settings)
 
 
-def gemini_image_api_base(settings: Settings) -> str:
+def gemini_image_api_base(settings: Settings, api_base: str | None = None) -> str:
+    if api_base:
+        return str(api_base).rstrip("/")
     return str(
         settings.gemini_image_api_base or settings.image_api_base or DEFAULT_API_BASE
     ).rstrip("/")
 
 
+def image_api_candidate_from_item(
+    item: dict[str, Any],
+    *,
+    key_slot: str,
+    fallback_api_base: str,
+    model: str = "",
+) -> dict[str, str] | None:
+    api_key = resolve_secret_value(item.get("api_key"))
+    if not api_key:
+        return None
+    candidate = {
+        "api_key": api_key,
+        "api_base": str(item.get("api_base") or fallback_api_base or DEFAULT_API_BASE).rstrip("/"),
+        "key_slot": key_slot,
+        "key_id": str(item.get("id") or "").strip(),
+        "name": str(item.get("name") or "").strip(),
+    }
+    if model:
+        candidate["model"] = model
+    return candidate
+
+
+def gpt_image_key_candidates(
+    settings: Settings,
+    output_resolution: Any,
+) -> list[dict[str, str]]:
+    resolution = normalize_output_resolution(output_resolution)
+    if resolution == "1k":
+        pool = sort_pool_candidates(
+            settings.gpt_image_1k_key_pool,
+            settings.default_gpt_image_1k_key_id,
+        )
+        fallback_api_base = settings.gpt_image_1k_api_base or settings.gpt_image_api_base
+        candidates = [
+            candidate
+            for item in pool
+            if (
+                candidate := image_api_candidate_from_item(
+                    item,
+                    key_slot="gpt-1k",
+                    fallback_api_base=fallback_api_base,
+                )
+            )
+        ]
+        if candidates:
+            return candidates
+        if settings.gpt_image_1k_key_pool:
+            return []
+        fallback_key = resolve_secret_value(settings.gpt_image_1k_api_key) or resolve_secret_value(
+            settings.image_1k_api_key
+        )
+        if fallback_key:
+            return [
+                {
+                    "api_key": fallback_key,
+                    "api_base": str(fallback_api_base or DEFAULT_API_BASE).rstrip("/"),
+                    "key_slot": "gpt-1k",
+                    "key_id": "legacy-gpt-1k",
+                    "name": "gpt-image-2 1K Key",
+                }
+            ]
+        return []
+
+    pool = sort_pool_candidates(settings.gpt_image_key_pool, settings.default_gpt_image_key_id)
+    fallback_api_base = settings.gpt_image_api_base or settings.image_api_base
+    candidates = [
+        candidate
+        for item in pool
+        if (
+            candidate := image_api_candidate_from_item(
+                item,
+                key_slot="gpt-2k4k",
+                fallback_api_base=fallback_api_base,
+            )
+        )
+    ]
+    if candidates:
+        return candidates
+    if settings.gpt_image_key_pool:
+        return []
+    fallback_key = resolve_secret_value(settings.gpt_image_api_key) or resolve_secret_value(
+        settings.image_api_key
+    )
+    if fallback_key:
+        return [
+            {
+                "api_key": fallback_key,
+                "api_base": str(fallback_api_base or DEFAULT_API_BASE).rstrip("/"),
+                "key_slot": "gpt-2k4k",
+                "key_id": "legacy-gpt-2k4k",
+                "name": "gpt-image-2 2K/4K Key",
+            }
+        ]
+    return []
+
+
+def gemini_image_key_candidates(settings: Settings) -> list[dict[str, str]]:
+    pool = sort_pool_candidates(
+        settings.gemini_image_key_pool,
+        settings.default_gemini_image_key_id,
+    )
+    fallback_model = (
+        normalize_image_model(settings.image_model)
+        if is_nano_banana_model(settings.image_model)
+        else IMAGE_MODEL_NANO_BANANA_2
+    )
+    candidates: list[dict[str, str]] = []
+    for item in pool:
+        raw_model = str(item.get("model") or fallback_model or "").strip()
+        try:
+            model = normalize_image_model(raw_model)
+        except AppError:
+            model = raw_model or fallback_model
+        if not is_nano_banana_model(model):
+            model = fallback_model
+        candidate = image_api_candidate_from_item(
+            item,
+            key_slot="gemini",
+            fallback_api_base=settings.gemini_image_api_base,
+            model=model,
+        )
+        if candidate:
+            candidates.append(candidate)
+    if candidates:
+        return candidates
+    if settings.gemini_image_key_pool:
+        return []
+    fallback_key = resolve_secret_value(settings.gemini_image_api_key)
+    if fallback_key:
+        return [
+            {
+                "api_key": fallback_key,
+                "api_base": str(settings.gemini_image_api_base or DEFAULT_API_BASE).rstrip("/"),
+                "key_slot": "gemini",
+                "key_id": "legacy-gemini",
+                "name": "Banana / Gemini Key",
+                "model": fallback_model,
+            }
+        ]
+    return []
+
+
+def resolve_image_api_candidates(
+    settings: Settings,
+    output_resolution: Any,
+    image_model: str | None = None,
+) -> list[dict[str, str]]:
+    selected_model = normalize_image_model(image_model or settings.image_model)
+    if is_nano_banana_model(selected_model):
+        return gemini_image_key_candidates(settings)
+    return gpt_image_key_candidates(settings, output_resolution)
+
+
 def has_image_api_key_for_model(settings: Settings, image_model: str) -> bool:
     model = normalize_image_model(image_model)
     if is_nano_banana_model(model):
-        return bool(resolve_secret_value(settings.gemini_image_api_key))
+        return bool(gemini_image_key_candidates(settings))
     return bool(
-        resolve_secret_value(settings.gpt_image_api_key)
-        or resolve_secret_value(settings.gpt_image_1k_api_key)
-        or resolve_secret_value(settings.image_api_key)
-        or resolve_secret_value(settings.image_1k_api_key)
+        gpt_image_key_candidates(settings, "1k")
+        or gpt_image_key_candidates(settings, "2k")
     )
 
 
@@ -4586,11 +5422,15 @@ def gemini_image_size(output_resolution: str) -> str:
     return normalize_output_resolution(output_resolution).upper()
 
 
-def gemini_image_endpoint(settings: Settings, image_model: str) -> str:
+def gemini_image_endpoint(
+    settings: Settings,
+    image_model: str,
+    api_base: str | None = None,
+) -> str:
     model = normalize_image_model(image_model)
     if not is_nano_banana_model(model):
         raise AppError(f"{model} 不是 Gemini 官方格式生图模型。")
-    return f"{gemini_image_api_base(settings)}/v1beta/models/{model}:generateContent"
+    return f"{gemini_image_api_base(settings, api_base)}/v1beta/models/{model}:generateContent"
 
 
 def resolve_effective_image_model(
@@ -4968,27 +5808,15 @@ def resolve_image_api_selection(
     output_resolution: Any,
     image_model: str | None = None,
 ) -> dict[str, str]:
-    resolution = normalize_output_resolution(output_resolution)
     selected_model = normalize_image_model(image_model or settings.image_model)
+    candidates = resolve_image_api_candidates(settings, output_resolution, selected_model)
+    if candidates:
+        return candidates[0]
     if is_nano_banana_model(selected_model):
-        gemini_key = resolve_secret_value(settings.gemini_image_api_key)
-        if gemini_key:
-            return {"api_key": gemini_key, "key_slot": "gemini"}
         raise AppError("请先在设置页填写有效的 Gemini 生图 API Key。")
+    resolution = normalize_output_resolution(output_resolution)
     if resolution == "1k":
-        key_1k = (
-            resolve_secret_value(settings.gpt_image_1k_api_key)
-            or resolve_secret_value(settings.image_1k_api_key)
-        )
-        if key_1k:
-            return {"api_key": key_1k, "key_slot": "gpt-1k"}
         raise AppError("请先在设置页填写有效的 gpt-image-2 1K API Key。")
-    default_key = (
-        resolve_secret_value(settings.gpt_image_api_key)
-        or resolve_secret_value(settings.image_api_key)
-    )
-    if default_key:
-        return {"api_key": default_key, "key_slot": "gpt-2k4k"}
     raise AppError("请先在设置页填写有效的 gpt-image-2 2K/4K API Key。")
 
 
@@ -5208,11 +6036,9 @@ def generate_prompts(
         prompt_count=prompt_count,
         user_prompt=user_prompt,
     )
-    response_json = request_json(
-        f"{settings.llm_api_base}/v1/chat/completions",
+    response_json = request_llm_with_key_pool(
+        settings,
         payload,
-        api_key=settings.llm_api_key,
-        idempotency_key=None,
         connect_timeout_seconds=settings.llm_connect_timeout_seconds,
         read_timeout_seconds=settings.chat_read_timeout_seconds,
         retry_count=settings.llm_retry_count,
@@ -5220,7 +6046,6 @@ def generate_prompts(
         label="prompt generation",
         request_log_path=json_dir / "prompt.request.json",
         response_log_path=json_dir / "prompt.response.json",
-        use_system_proxy=settings.use_system_proxy,
     )
     prompts = extract_numbered_prompts(extract_message_text(response_json), prompt_count)
     prompt_path = run_dir / "prompts.txt"
@@ -5245,11 +6070,9 @@ def generate_style_replicate2_prompts(
         prompt_count=prompt_count,
         user_prompt=user_prompt,
     )
-    response_json = request_json(
-        f"{settings.llm_api_base}/v1/chat/completions",
+    response_json = request_llm_with_key_pool(
+        settings,
         payload,
-        api_key=settings.llm_api_key,
-        idempotency_key=None,
         connect_timeout_seconds=settings.llm_connect_timeout_seconds,
         read_timeout_seconds=settings.chat_read_timeout_seconds,
         retry_count=settings.llm_retry_count,
@@ -5257,7 +6080,6 @@ def generate_style_replicate2_prompts(
         label="style replicate 2 prompt generation",
         request_log_path=json_dir / "prompt.request.json",
         response_log_path=json_dir / "prompt.response.json",
-        use_system_proxy=settings.use_system_proxy,
     )
     prompts = extract_numbered_prompts(extract_message_text(response_json), prompt_count)
     prompt_path = run_dir / "prompts.txt"
@@ -5274,15 +6096,12 @@ def generate_color_analysis_text(
     json_dir: Path,
     logger: AppLogger,
 ) -> str:
-    api_key = resolve_secret_value(settings.color_match_api_key)
-    if not api_key:
-        raise AppError("请先在设置页填写有效的追色大模型 API Key。")
+    if not has_llm_api_key(settings):
+        raise AppError("请先在设置页填写至少一个可用的大模型 API Key。")
     payload = color_analysis_chat_payload(settings, tone_image=tone_image)
-    response_json = request_json(
-        f"{settings.color_match_api_base}/v1/chat/completions",
+    response_json = request_llm_with_key_pool(
+        settings,
         payload,
-        api_key=api_key,
-        idempotency_key=None,
         connect_timeout_seconds=settings.llm_connect_timeout_seconds,
         read_timeout_seconds=settings.chat_read_timeout_seconds,
         retry_count=settings.llm_retry_count,
@@ -5290,7 +6109,6 @@ def generate_color_analysis_text(
         label="color analysis",
         request_log_path=json_dir / "color-analysis.request.json",
         response_log_path=json_dir / "color-analysis.response.json",
-        use_system_proxy=settings.use_system_proxy,
     )
     analysis_text = extract_message_text(response_json)
     analysis_path = run_dir / "color-analysis.md"
@@ -5692,7 +6510,7 @@ def repair_image_agent_design_response(
     response_json = request_image_agent_llm(
         settings,
         base_payload,
-        api_key=resolve_secret_value(settings.image_agent_api_key),
+        api_key="",
         connect_timeout_seconds=settings.llm_connect_timeout_seconds,
         read_timeout_seconds=settings.chat_read_timeout_seconds,
         retry_count=settings.llm_retry_count,
@@ -5790,9 +6608,9 @@ def generate_image_agent_plan(
     json_dir: Path,
     logger: AppLogger,
 ) -> tuple[dict[str, Any], Any]:
-    api_key = resolve_secret_value(settings.image_agent_api_key)
-    if not api_key:
-        raise AppError("请先在设置页填写有效的 Agent 大模型 API Key。")
+    if not has_llm_api_key(settings):
+        raise AppError("请先在设置页填写至少一个可用的大模型 API Key。")
+    api_key = ""
     base_payload = image_agent_chat_payload(
         settings,
         system_prompt=render_image_agent_system_prompt(
@@ -5945,7 +6763,7 @@ def generate_image_agent_design(
     response_json = request_image_agent_llm(
         settings,
         payload,
-        api_key=resolve_secret_value(settings.image_agent_api_key),
+        api_key="",
         connect_timeout_seconds=settings.llm_connect_timeout_seconds,
         read_timeout_seconds=settings.chat_read_timeout_seconds,
         retry_count=settings.llm_retry_count,
@@ -6174,93 +6992,149 @@ def render_one_prompt(
         input_images=product_images,
         logger=logger,
     )
-    effective_image_model = resolve_effective_image_model(
-        settings=settings,
-        image_model=selected_image_model,
-        output_resolution=request_config["output_resolution"],
-        output_aspect_ratio=request_config["output_aspect_ratio"],
-    )
-
     idempotency_key = build_image_request_idempotency_key(
         run_id,
         endpoint_scope,
         f"{prompt_index:02d}",
     )
-    endpoint_label = (
-        f"/v1beta/models/{effective_image_model}:generateContent"
-        if is_nano_banana_model(selected_image_model)
-        else "/v1/images/edits"
-    )
-    logger.log(
-        "render "
-        f"{prompt_index:02d}: endpoint={endpoint_label}, model={effective_image_model}, "
-        f"product_images={len(product_images)}, "
-        f"resolution={request_config['output_resolution']}, "
-        f"ratio={request_config['output_aspect_ratio']}, "
-        f"size={request_config['size'] or gemini_image_size(request_config['output_resolution'])}, "
-        f"key_slot={image_key_slot}, "
-        f"idempotency_key={idempotency_key}"
-    )
     request_path = json_dir / f"{prompt_index:02d}.request.json"
     response_path = json_dir / f"{prompt_index:02d}.response.json"
     request_label = f"render {prompt_index:02d}"
+    image_api_candidates = resolve_image_api_candidates(
+        settings,
+        request_config["output_resolution"],
+        selected_image_model,
+    )
+    if not image_api_candidates and resolve_secret_value(image_api_key):
+        image_api_candidates = [
+            {
+                "api_key": resolve_secret_value(image_api_key),
+                "api_base": gpt_image_request_api_base(
+                    settings,
+                    request_config["output_resolution"],
+                )
+                if not is_nano_banana_model(selected_image_model)
+                else gemini_image_api_base(settings),
+                "key_slot": image_key_slot,
+                "name": image_key_slot,
+            }
+        ]
+    if not image_api_candidates:
+        raise AppError("请先在设置页填写当前生图模型对应的 API Key。")
+    last_error: AppError | None = None
     with external_request_slot(request_label, logger):
         with shared_render_slot():
-            if is_nano_banana_model(selected_image_model):
-                request_payload = build_gemini_image_payload(
-                    prompt_text=render_prompt_text,
-                    input_images=product_images,
-                    request_config=request_config,
+            for attempt_index, candidate in enumerate(image_api_candidates, start=1):
+                candidate_key = resolve_secret_value(candidate.get("api_key"))
+                if not candidate_key:
+                    continue
+                candidate_model = (
+                    str(candidate.get("model") or selected_image_model).strip()
+                    if is_nano_banana_model(selected_image_model)
+                    else selected_image_model
                 )
-                response_json = request_json(
-                    gemini_image_endpoint(settings, effective_image_model),
-                    request_payload,
-                    api_key=image_api_key,
-                    idempotency_key=idempotency_key,
-                    connect_timeout_seconds=settings.image_connect_timeout_seconds,
-                    read_timeout_seconds=settings.image_read_timeout_seconds,
-                    retry_count=settings.image_retry_count,
-                    logger=logger,
-                    label=request_label,
-                    request_log_path=request_path,
-                    response_log_path=response_path,
-                    log_payload=redact_gemini_image_payload(request_payload),
-                    upload_gate=upload_gate,
-                    use_system_proxy=settings.use_system_proxy,
+                candidate_slot = str(candidate.get("key_slot") or image_key_slot or "").strip()
+                candidate_label = candidate_key_label(candidate, f"key{attempt_index}")
+                attempt_label = (
+                    request_label
+                    if attempt_index == 1
+                    else f"{request_label} key{attempt_index}"
                 )
-            else:
-                fields, _ = build_image_request_fields(
-                    prompt_text=render_prompt_text,
-                    settings=settings,
-                    image_model=selected_image_model,
-                    request_config=request_config,
-                    include_count=images_per_prompt,
-                )
-                response_json = request_multipart_json(
-                    f"{gpt_image_request_api_base(settings, request_config['output_resolution'])}/v1/images/edits",
-                    fields,
-                    file_parts=[("image", product_image) for product_image in product_images],
-                    api_key=image_api_key,
-                    idempotency_key=idempotency_key,
-                    connect_timeout_seconds=settings.image_connect_timeout_seconds,
-                    read_timeout_seconds=settings.image_read_timeout_seconds,
-                    retry_count=settings.image_retry_count,
-                    logger=logger,
-                    label=request_label,
-                    request_log_path=request_path,
-                    response_log_path=response_path,
-                    upload_gate=upload_gate,
-                    use_system_proxy=settings.use_system_proxy,
-                )
-    return save_render_outputs(
-        response_json,
-        output_dir=output_dir,
-        prompt_index=prompt_index,
-        prompt_text=render_prompt_text,
-        settings=settings,
-        logger=logger,
-        response_file=response_path,
-    )
+                attempt_request_path = keyed_log_path(request_path, attempt_index)
+                attempt_response_path = keyed_log_path(response_path, attempt_index)
+                try:
+                    effective_image_model = resolve_effective_image_model(
+                        settings=settings,
+                        image_model=candidate_model,
+                        output_resolution=request_config["output_resolution"],
+                        output_aspect_ratio=request_config["output_aspect_ratio"],
+                    )
+                    endpoint_label = (
+                        f"/v1beta/models/{effective_image_model}:generateContent"
+                        if is_nano_banana_model(selected_image_model)
+                        else "/v1/images/edits"
+                    )
+                    logger.log(
+                        "render "
+                        f"{prompt_index:02d}: endpoint={endpoint_label}, model={effective_image_model}, "
+                        f"product_images={len(product_images)}, "
+                        f"resolution={request_config['output_resolution']}, "
+                        f"ratio={request_config['output_aspect_ratio']}, "
+                        f"size={request_config['size'] or gemini_image_size(request_config['output_resolution'])}, "
+                        f"key_slot={candidate_slot}, key={candidate_label}, "
+                        f"idempotency_key={idempotency_key}"
+                    )
+                    if is_nano_banana_model(selected_image_model):
+                        request_payload = build_gemini_image_payload(
+                            prompt_text=render_prompt_text,
+                            input_images=product_images,
+                            request_config=request_config,
+                        )
+                        response_json = request_json(
+                            gemini_image_endpoint(
+                                settings,
+                                effective_image_model,
+                                candidate.get("api_base"),
+                            ),
+                            request_payload,
+                            api_key=candidate_key,
+                            idempotency_key=idempotency_key,
+                            connect_timeout_seconds=settings.image_connect_timeout_seconds,
+                            read_timeout_seconds=settings.image_read_timeout_seconds,
+                            retry_count=settings.image_retry_count,
+                            logger=logger,
+                            label=attempt_label,
+                            request_log_path=attempt_request_path,
+                            response_log_path=attempt_response_path,
+                            log_payload=redact_gemini_image_payload(request_payload),
+                            upload_gate=upload_gate,
+                            use_system_proxy=settings.use_system_proxy,
+                        )
+                    else:
+                        fields, _ = build_image_request_fields(
+                            prompt_text=render_prompt_text,
+                            settings=settings,
+                            image_model=selected_image_model,
+                            request_config=request_config,
+                            include_count=images_per_prompt,
+                        )
+                        response_json = request_multipart_json(
+                            f"{gpt_image_request_api_base(settings, request_config['output_resolution'], candidate.get('api_base'))}/v1/images/edits",
+                            fields,
+                            file_parts=[
+                                ("image", product_image) for product_image in product_images
+                            ],
+                            api_key=candidate_key,
+                            idempotency_key=idempotency_key,
+                            connect_timeout_seconds=settings.image_connect_timeout_seconds,
+                            read_timeout_seconds=settings.image_read_timeout_seconds,
+                            retry_count=settings.image_retry_count,
+                            logger=logger,
+                            label=attempt_label,
+                            request_log_path=attempt_request_path,
+                            response_log_path=attempt_response_path,
+                            upload_gate=upload_gate,
+                            use_system_proxy=settings.use_system_proxy,
+                        )
+                    return save_render_outputs(
+                        response_json,
+                        output_dir=output_dir,
+                        prompt_index=prompt_index,
+                        prompt_text=render_prompt_text,
+                        settings=settings,
+                        logger=logger,
+                        response_file=attempt_response_path,
+                    )
+                except AppError as exc:
+                    last_error = exc
+                    if attempt_index >= len(image_api_candidates) or not is_failover_retryable_error(exc):
+                        raise
+                    logger.log(
+                        f"{request_label}: Key {candidate_label} 失败，自动切换下一个生图 Key：{exc}"
+                    )
+    if last_error is not None:
+        raise last_error
+    raise AppError("请先在设置页填写当前生图模型对应的 API Key。")
 
 
 def render_prompts(
@@ -6458,112 +7332,169 @@ def render_image_edit(
         resolved_endpoint_scope,
         f"{prompt_index:02d}",
     )
+    image_api_candidates = resolve_image_api_candidates(
+        settings,
+        request_config["output_resolution"],
+        selected_image_model,
+    )
+    if not image_api_candidates and resolve_secret_value(image_api_key):
+        image_api_candidates = [
+            {
+                "api_key": resolve_secret_value(image_api_key),
+                "api_base": gpt_image_request_api_base(
+                    settings,
+                    request_config["output_resolution"],
+                )
+                if not is_nano_banana_model(selected_image_model)
+                else gemini_image_api_base(settings),
+                "key_slot": image_key_slot,
+                "name": image_key_slot,
+            }
+        ]
+    if not image_api_candidates:
+        raise AppError("请先在设置页填写当前生图模型对应的 API Key。")
+    last_error: AppError | None = None
     with external_request_slot(label, logger):
         with shared_render_slot():
-            if is_nano_banana_model(selected_image_model):
-                request_payload = build_gemini_image_payload(
-                    prompt_text=prompt_text,
-                    input_images=input_images,
-                    request_config=request_config,
+            for attempt_index, candidate in enumerate(image_api_candidates, start=1):
+                candidate_key = resolve_secret_value(candidate.get("api_key"))
+                if not candidate_key:
+                    continue
+                candidate_model = (
+                    str(candidate.get("model") or selected_image_model).strip()
+                    if is_nano_banana_model(selected_image_model)
+                    else selected_image_model
                 )
-                endpoint_url = gemini_image_endpoint(settings, effective_image_model)
-                logger.log(
-                    f"{label}: "
-                    f"endpoint={urllib.parse.urlparse(endpoint_url).path}, model={effective_image_model}, images={len(input_images)}, "
-                    f"resolution={request_config['output_resolution']}, "
-                    f"ratio={request_config['output_aspect_ratio']}, "
-                    f"image_size={gemini_image_size(request_config['output_resolution'])}, "
-                    f"key_slot={image_key_slot}, "
-                    f"idempotency_key={idempotency_key}"
-                )
-                response_json = request_json(
-                    endpoint_url,
-                    request_payload,
-                    api_key=image_api_key,
-                    idempotency_key=idempotency_key,
-                    connect_timeout_seconds=settings.image_connect_timeout_seconds,
-                    read_timeout_seconds=settings.image_read_timeout_seconds,
-                    retry_count=settings.image_retry_count,
-                    logger=logger,
-                    label=label,
-                    request_log_path=request_path,
-                    response_log_path=response_path,
-                    log_payload=redact_gemini_image_payload(request_payload),
-                    use_system_proxy=settings.use_system_proxy,
-                )
-            elif use_multipart_edit_endpoint:
-                request_fields, _ = build_image_request_fields(
-                    prompt_text=prompt_text,
-                    settings=settings,
-                    image_model=selected_image_model,
-                    request_config=request_config,
-                    include_count=1,
-                )
-                logger.log(
-                    f"{label}: "
-                    f"endpoint=/v1/images/edits, model={effective_image_model}, images={len(input_images)}, "
-                    f"resolution={request_config['output_resolution']}, "
-                    f"ratio={request_config['output_aspect_ratio']}, "
-                    f"size={request_config['size']}, "
-                    f"key_slot={image_key_slot}, "
-                    f"idempotency_key={idempotency_key}"
-                )
-                response_json = request_multipart_json(
-                    f"{gpt_image_request_api_base(settings, request_config['output_resolution'])}/v1/images/edits",
-                    request_fields,
-                    file_parts=[("image", image_path) for image_path in input_images],
-                    api_key=image_api_key,
-                    idempotency_key=idempotency_key,
-                    connect_timeout_seconds=settings.image_connect_timeout_seconds,
-                    read_timeout_seconds=settings.image_read_timeout_seconds,
-                    retry_count=settings.image_retry_count,
-                    logger=logger,
-                    label=label,
-                    request_log_path=request_path,
-                    response_log_path=response_path,
-                    use_system_proxy=settings.use_system_proxy,
-                )
-            else:
-                request_fields, _ = build_image_request_fields(
-                    prompt_text=prompt_text,
-                    settings=settings,
-                    image_model=selected_image_model,
-                    request_config=request_config,
-                    include_count=1,
-                )
-                request_payload = dict(request_fields)
-                logger.log(
-                    f"{label}: "
-                    f"endpoint=/v1/images/generations, model={effective_image_model}, "
-                    f"resolution={request_config['output_resolution']}, "
-                    f"ratio={request_config['output_aspect_ratio']}, "
-                    f"size={request_config['size']}, "
-                    f"key_slot={image_key_slot}, "
-                    f"idempotency_key={idempotency_key}"
-                )
-                response_json = request_json(
-                    f"{gpt_image_request_api_base(settings, request_config['output_resolution'])}/v1/images/generations",
-                    request_payload,
-                    api_key=image_api_key,
-                    idempotency_key=idempotency_key,
-                    connect_timeout_seconds=settings.image_connect_timeout_seconds,
-                    read_timeout_seconds=settings.image_read_timeout_seconds,
-                    retry_count=settings.image_retry_count,
-                    logger=logger,
-                    label=label,
-                    request_log_path=request_path,
-                    response_log_path=response_path,
-                    use_system_proxy=settings.use_system_proxy,
-                )
-    return save_render_outputs(
-        response_json,
-        output_dir=output_dir,
-        prompt_index=prompt_index,
-        prompt_text=prompt_text,
-        settings=settings,
-        logger=logger,
-        response_file=response_path,
-    )
+                candidate_slot = str(candidate.get("key_slot") or image_key_slot or "").strip()
+                candidate_label = candidate_key_label(candidate, f"key{attempt_index}")
+                attempt_label = label if attempt_index == 1 else f"{label} key{attempt_index}"
+                attempt_request_path = keyed_log_path(request_path, attempt_index)
+                attempt_response_path = keyed_log_path(response_path, attempt_index)
+                try:
+                    effective_image_model = resolve_effective_image_model(
+                        settings=settings,
+                        image_model=candidate_model,
+                        output_resolution=request_config["output_resolution"],
+                        output_aspect_ratio=request_config["output_aspect_ratio"],
+                    )
+                    if is_nano_banana_model(selected_image_model):
+                        request_payload = build_gemini_image_payload(
+                            prompt_text=prompt_text,
+                            input_images=input_images,
+                            request_config=request_config,
+                        )
+                        endpoint_url = gemini_image_endpoint(
+                            settings,
+                            effective_image_model,
+                            candidate.get("api_base"),
+                        )
+                        logger.log(
+                            f"{label}: "
+                            f"endpoint={urllib.parse.urlparse(endpoint_url).path}, model={effective_image_model}, images={len(input_images)}, "
+                            f"resolution={request_config['output_resolution']}, "
+                            f"ratio={request_config['output_aspect_ratio']}, "
+                            f"image_size={gemini_image_size(request_config['output_resolution'])}, "
+                            f"key_slot={candidate_slot}, key={candidate_label}, "
+                            f"idempotency_key={idempotency_key}"
+                        )
+                        response_json = request_json(
+                            endpoint_url,
+                            request_payload,
+                            api_key=candidate_key,
+                            idempotency_key=idempotency_key,
+                            connect_timeout_seconds=settings.image_connect_timeout_seconds,
+                            read_timeout_seconds=settings.image_read_timeout_seconds,
+                            retry_count=settings.image_retry_count,
+                            logger=logger,
+                            label=attempt_label,
+                            request_log_path=attempt_request_path,
+                            response_log_path=attempt_response_path,
+                            log_payload=redact_gemini_image_payload(request_payload),
+                            use_system_proxy=settings.use_system_proxy,
+                        )
+                    elif use_multipart_edit_endpoint:
+                        request_fields, _ = build_image_request_fields(
+                            prompt_text=prompt_text,
+                            settings=settings,
+                            image_model=selected_image_model,
+                            request_config=request_config,
+                            include_count=1,
+                        )
+                        logger.log(
+                            f"{label}: "
+                            f"endpoint=/v1/images/edits, model={effective_image_model}, images={len(input_images)}, "
+                            f"resolution={request_config['output_resolution']}, "
+                            f"ratio={request_config['output_aspect_ratio']}, "
+                            f"size={request_config['size']}, "
+                            f"key_slot={candidate_slot}, key={candidate_label}, "
+                            f"idempotency_key={idempotency_key}"
+                        )
+                        response_json = request_multipart_json(
+                            f"{gpt_image_request_api_base(settings, request_config['output_resolution'], candidate.get('api_base'))}/v1/images/edits",
+                            request_fields,
+                            file_parts=[("image", image_path) for image_path in input_images],
+                            api_key=candidate_key,
+                            idempotency_key=idempotency_key,
+                            connect_timeout_seconds=settings.image_connect_timeout_seconds,
+                            read_timeout_seconds=settings.image_read_timeout_seconds,
+                            retry_count=settings.image_retry_count,
+                            logger=logger,
+                            label=attempt_label,
+                            request_log_path=attempt_request_path,
+                            response_log_path=attempt_response_path,
+                            use_system_proxy=settings.use_system_proxy,
+                        )
+                    else:
+                        request_fields, _ = build_image_request_fields(
+                            prompt_text=prompt_text,
+                            settings=settings,
+                            image_model=selected_image_model,
+                            request_config=request_config,
+                            include_count=1,
+                        )
+                        request_payload = dict(request_fields)
+                        logger.log(
+                            f"{label}: "
+                            f"endpoint=/v1/images/generations, model={effective_image_model}, "
+                            f"resolution={request_config['output_resolution']}, "
+                            f"ratio={request_config['output_aspect_ratio']}, "
+                            f"size={request_config['size']}, "
+                            f"key_slot={candidate_slot}, key={candidate_label}, "
+                            f"idempotency_key={idempotency_key}"
+                        )
+                        response_json = request_json(
+                            f"{gpt_image_request_api_base(settings, request_config['output_resolution'], candidate.get('api_base'))}/v1/images/generations",
+                            request_payload,
+                            api_key=candidate_key,
+                            idempotency_key=idempotency_key,
+                            connect_timeout_seconds=settings.image_connect_timeout_seconds,
+                            read_timeout_seconds=settings.image_read_timeout_seconds,
+                            retry_count=settings.image_retry_count,
+                            logger=logger,
+                            label=attempt_label,
+                            request_log_path=attempt_request_path,
+                            response_log_path=attempt_response_path,
+                            use_system_proxy=settings.use_system_proxy,
+                        )
+                    return save_render_outputs(
+                        response_json,
+                        output_dir=output_dir,
+                        prompt_index=prompt_index,
+                        prompt_text=prompt_text,
+                        settings=settings,
+                        logger=logger,
+                        response_file=attempt_response_path,
+                    )
+                except AppError as exc:
+                    last_error = exc
+                    if attempt_index >= len(image_api_candidates) or not is_failover_retryable_error(exc):
+                        raise
+                    logger.log(
+                        f"{label}: Key {candidate_label} 失败，自动切换下一个生图 Key：{exc}"
+                    )
+    if last_error is not None:
+        raise last_error
+    raise AppError("请先在设置页填写当前生图模型对应的 API Key。")
 
 
 def count_rendered_images(manifest: list[dict[str, Any]]) -> int:
@@ -6885,8 +7816,8 @@ def run_image_agent_pipeline(
     logger: AppLogger,
     progress_callback: Any | None = None,
 ) -> dict[str, Any]:
-    if not resolve_secret_value(settings.image_agent_api_key):
-        raise AppError("请先在设置页填写有效的 Agent 大模型 API Key。")
+    if not has_llm_api_key(settings):
+        raise AppError("请先在设置页填写至少一个可用的大模型 API Key。")
     user_prompt = options.prompt.strip()
     if not user_prompt:
         raise AppError("Agent 模式需要填写图片生成需求。")
@@ -7332,8 +8263,8 @@ def run_color_match_pipeline(
     options: ColorMatchOptions,
     logger: AppLogger,
 ) -> dict[str, Any]:
-    if not resolve_secret_value(settings.color_match_api_key):
-        raise AppError("请先在设置页填写有效的追色大模型 API Key。")
+    if not has_llm_api_key(settings):
+        raise AppError("请先在设置页填写至少一个可用的大模型 API Key。")
 
     selected_image_model = image_model_from_settings(settings)
     if not has_image_api_key_for_model(settings, selected_image_model):
@@ -7635,7 +8566,7 @@ def run_pipeline(
     logger: AppLogger,
     progress_callback: Any | None = None,
 ) -> dict[str, Any]:
-    if not settings.llm_api_key or settings.llm_api_key == "replace-me":
+    if not has_llm_api_key(settings):
         raise AppError("请先在设置页填写有效的大模型 API Key。")
     selected_image_model = image_model_from_settings(settings)
     if not has_image_api_key_for_model(settings, selected_image_model):
@@ -7852,7 +8783,7 @@ def run_style_replicate2_pipeline(
     logger: AppLogger,
     progress_callback: Any | None = None,
 ) -> dict[str, Any]:
-    if not settings.llm_api_key or settings.llm_api_key == "replace-me":
+    if not has_llm_api_key(settings):
         raise AppError("请先在设置页填写有效的大模型 API Key。")
     selected_image_model = image_model_from_settings(settings)
     if not has_image_api_key_for_model(settings, selected_image_model):

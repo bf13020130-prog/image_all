@@ -1,5 +1,6 @@
 param(
-    [string]$OutputPath = "release\image_all-platform.zip"
+    [string]$OutputPath = "release\image_all-platform.zip",
+    [bool]$IncludeRuntimeData = $true
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,6 +26,22 @@ $stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("image-all-package-"
 New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
 
 try {
+    function Copy-PackageFile {
+        param(
+            [string]$SourcePath,
+            [string]$TargetRelativePath
+        )
+        if (-not (Test-Path $SourcePath)) {
+            return
+        }
+        $target = Join-Path $stagingRoot $TargetRelativePath
+        $targetDir = Split-Path -Parent $target
+        if ($targetDir) {
+            New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+        }
+        Copy-Item -LiteralPath $SourcePath -Destination $target -Force
+    }
+
     foreach ($file in $packageFiles) {
         $target = Join-Path $stagingRoot $file
         $targetDir = Split-Path -Parent $target
@@ -32,6 +49,17 @@ try {
             New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
         }
         Copy-Item -LiteralPath $file -Destination $target -Force
+    }
+
+    if ($IncludeRuntimeData) {
+        if (Test-Path "platform_runtime\platform.db") {
+            python -B scripts\checkpoint_platform_db.py platform_runtime\platform.db
+        }
+        Copy-PackageFile -SourcePath ".env" -TargetRelativePath ".env"
+        Copy-PackageFile -SourcePath "platform_runtime\config.json" -TargetRelativePath "platform_runtime\config.json"
+        Copy-PackageFile -SourcePath "platform_runtime\platform.db" -TargetRelativePath "platform_runtime\platform.db"
+        Copy-PackageFile -SourcePath "platform_runtime\platform.db-wal" -TargetRelativePath "platform_runtime\platform.db-wal"
+        Copy-PackageFile -SourcePath "platform_runtime\platform.db-shm" -TargetRelativePath "platform_runtime\platform.db-shm"
     }
 
     Compress-Archive -Path (Join-Path $stagingRoot "*") -DestinationPath $OutputPath -Force
@@ -43,3 +71,6 @@ finally {
 }
 
 Write-Host "Created $OutputPath"
+if ($IncludeRuntimeData) {
+    Write-Host "Included .env, platform_runtime/config.json and platform_runtime/platform.db*"
+}

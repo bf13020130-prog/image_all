@@ -639,69 +639,18 @@
               </div>
 
               <div class="settings-stack__sections">
-                <fieldset class="settings-block settings-block--compact">
-                  <legend>提示词/通用大模型</legend>
-
-                  <label class="field">
-                    <span>API Base</span>
-                    <input type="text" name="llm_api_base" autocomplete="off" />
-                  </label>
-
-                  <label class="field">
-                    <span>API Key</span>
-                    <input type="password" name="llm_api_key" autocomplete="new-password" />
-                  </label>
-
-                  <label class="field">
-                    <span>提示词模型</span>
-                    <input type="text" name="chat_model" />
-                  </label>
-                </fieldset>
-
-                <fieldset class="settings-block settings-block--compact">
-                  <legend>追色大模型</legend>
-
-                  <label class="field">
-                    <span>API Base</span>
-                    <input type="text" name="color_match_api_base" autocomplete="off" />
-                  </label>
-
-                  <label class="field">
-                    <span>API Key</span>
-                    <input type="password" name="color_match_api_key" autocomplete="new-password" />
-                  </label>
-
-                  <label class="field">
-                    <span>模型 ID</span>
-                    <input type="text" name="color_match_model" />
-                  </label>
-                </fieldset>
-
-                <fieldset class="settings-block settings-block--compact">
-                  <legend>Agent 大模型</legend>
-
-                  <label class="field">
-                    <span>API Base</span>
-                    <input type="text" name="image_agent_api_base" autocomplete="off" />
-                  </label>
-
-                  <label class="field">
-                    <span>API Key</span>
-                    <input type="password" name="image_agent_api_key" autocomplete="new-password" />
-                  </label>
-
-                  <label class="field">
-                    <span>模型 ID</span>
-                    <input type="text" name="image_agent_model" />
-                  </label>
-
-                  <label class="field">
-                    <span>Agent API</span>
-                    <select name="image_agent_endpoint_type">
-                      <option value="chat_completions">/v1/chat/completions</option>
-                      <option value="responses">/v1/responses</option>
-                    </select>
-                  </label>
+                <fieldset class="settings-block settings-block--compact key-pool" data-key-pool="llm">
+                  <legend>大模型 Key 池</legend>
+                  <div class="key-pool__bar">
+                    <label class="field">
+                      <span>默认 Key</span>
+                      <select data-key-pool-default="llm"></select>
+                    </label>
+                    <button class="secondary-action key-pool__add" type="button" data-key-pool-add="llm">
+                      + 添加 Key
+                    </button>
+                  </div>
+                  <div class="key-pool__rows" data-key-pool-rows="llm"></div>
                 </fieldset>
 
                 <fieldset class="settings-block settings-block--compact">
@@ -761,56 +710,56 @@
                   </label>
                 </fieldset>
 
-                <fieldset class="settings-block settings-block--compact">
+                <fieldset class="settings-block settings-block--compact key-pool" data-key-pool="gpt1k">
                   <legend>gpt-image-2 1K</legend>
+                  <div class="key-pool__bar">
+                    <label class="field">
+                      <span>默认 Key</span>
+                      <select data-key-pool-default="gpt1k"></select>
+                    </label>
+                    <button class="secondary-action key-pool__add" type="button" data-key-pool-add="gpt1k">
+                      + 添加 Key
+                    </button>
+                  </div>
+                  <div class="key-pool__rows" data-key-pool-rows="gpt1k"></div>
 
                   <label class="field">
-                    <span>API Base</span>
-                    <input type="text" name="gpt_image_1k_api_base" autocomplete="off" />
-                  </label>
-
-                  <label class="field">
-                    <span>API Key</span>
-                    <input type="password" name="gpt_image_1k_api_key" autocomplete="new-password" />
-                  </label>
-
-                  <label class="field">
-                    <span>模型 ID</span>
+                    <span>全局模型 ID</span>
                     <input type="text" name="image_model_gpt_image_2_1k" />
                   </label>
                 </fieldset>
 
-                <fieldset class="settings-block settings-block--compact">
+                <fieldset class="settings-block settings-block--compact key-pool" data-key-pool="gpt2k4k">
                   <legend>gpt-image-2 2K/4K</legend>
+                  <div class="key-pool__bar">
+                    <label class="field">
+                      <span>默认 Key</span>
+                      <select data-key-pool-default="gpt2k4k"></select>
+                    </label>
+                    <button class="secondary-action key-pool__add" type="button" data-key-pool-add="gpt2k4k">
+                      + 添加 Key
+                    </button>
+                  </div>
+                  <div class="key-pool__rows" data-key-pool-rows="gpt2k4k"></div>
 
                   <label class="field">
-                    <span>API Base</span>
-                    <input type="text" name="gpt_image_api_base" autocomplete="off" />
-                  </label>
-
-                  <label class="field">
-                    <span>API Key</span>
-                    <input type="password" name="gpt_image_api_key" autocomplete="new-password" />
-                  </label>
-
-                  <label class="field">
-                    <span>模型 ID</span>
+                    <span>全局模型 ID</span>
                     <input type="text" name="image_model_gpt_image_2" />
                   </label>
                 </fieldset>
 
-                <fieldset class="settings-block settings-block--compact">
+                <fieldset class="settings-block settings-block--compact key-pool" data-key-pool="gemini">
                   <legend>Gemini / Nano Banana</legend>
-
-                  <label class="field">
-                    <span>API Base</span>
-                    <input type="text" name="gemini_image_api_base" autocomplete="off" />
-                  </label>
-
-                  <label class="field">
-                    <span>API Key</span>
-                    <input type="password" name="gemini_image_api_key" autocomplete="new-password" />
-                  </label>
+                  <div class="key-pool__bar">
+                    <label class="field">
+                      <span>默认 Key</span>
+                      <select data-key-pool-default="gemini"></select>
+                    </label>
+                    <button class="secondary-action key-pool__add" type="button" data-key-pool-add="gemini">
+                      + 添加 Key
+                    </button>
+                  </div>
+                  <div class="key-pool__rows" data-key-pool-rows="gemini"></div>
                 </fieldset>
 
                 <fieldset class="settings-block settings-block--compact">

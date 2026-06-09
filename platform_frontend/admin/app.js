@@ -1,8 +1,12 @@
 let csrfToken = "";
 let currentUser = null;
 let revealedGlobalSettings = null;
+let currentSettings = {};
 
 const refs = {};
+
+const IMAGE_MODEL_NANO_BANANA_2 = "gemini-3.1-flash-image-preview";
+const IMAGE_MODEL_NANO_BANANA_PRO = "gemini-3-pro-image-preview";
 
 const SECRET_FIELDS = new Set([
   "llm_api_key",
@@ -14,6 +18,40 @@ const SECRET_FIELDS = new Set([
   "gpt_image_1k_api_key",
   "gemini_image_api_key",
 ]);
+
+const KEY_POOL_CONFIGS = {
+  llm: {
+    poolKey: "llm_key_pool",
+    defaultKey: "default_llm_key_id",
+    itemLabel: "大模型 Key",
+    apiBaseFallbackKey: "llm_api_base",
+    modelFallbackKey: "chat_model",
+    endpointFallbackKey: "llm_endpoint_type",
+    fields: { model: true, endpointType: true },
+  },
+  gpt1k: {
+    poolKey: "gpt_image_1k_key_pool",
+    defaultKey: "default_gpt_image_1k_key_id",
+    itemLabel: "1K 生图 Key",
+    apiBaseFallbackKey: "gpt_image_1k_api_base",
+    fields: {},
+  },
+  gpt2k4k: {
+    poolKey: "gpt_image_key_pool",
+    defaultKey: "default_gpt_image_key_id",
+    itemLabel: "2K/4K 生图 Key",
+    apiBaseFallbackKey: "gpt_image_api_base",
+    fields: {},
+  },
+  gemini: {
+    poolKey: "gemini_image_key_pool",
+    defaultKey: "default_gemini_image_key_id",
+    itemLabel: "Banana / Gemini Key",
+    apiBaseFallbackKey: "gemini_image_api_base",
+    modelFallbackValue: IMAGE_MODEL_NANO_BANANA_2,
+    fields: { model: true },
+  },
+};
 
 function normalizeConfiguredImageModelId(value) {
   const text = String(value || "").trim();
@@ -27,34 +65,8 @@ const STATIC_OPTIONS = {
 
 const SETTINGS_SECTIONS = [
   {
-    title: "提示词/通用大模型",
-    fields: [
-      { key: "llm_api_base", label: "API Base" },
-      { key: "llm_api_key", label: "API Key", type: "password" },
-      { key: "chat_model", label: "提示词模型" },
-    ],
-  },
-  {
-    title: "追色大模型",
-    fields: [
-      { key: "color_match_api_base", label: "API Base" },
-      { key: "color_match_api_key", label: "API Key", type: "password" },
-      { key: "color_match_model", label: "模型 ID" },
-    ],
-  },
-  {
-    title: "Agent 大模型",
-    fields: [
-      { key: "image_agent_api_base", label: "API Base" },
-      { key: "image_agent_api_key", label: "API Key", type: "password" },
-      { key: "image_agent_model", label: "模型 ID" },
-      {
-        key: "image_agent_endpoint_type",
-        label: "Agent API",
-        type: "select",
-        optionsKey: "available_llm_endpoint_types",
-      },
-    ],
+    title: "大模型 Key 池",
+    keyPool: "llm",
   },
   {
     title: "大模型通用请求参数",
@@ -90,36 +102,22 @@ const SETTINGS_SECTIONS = [
     ],
   },
   {
-    title: "旧版兼容生图字段",
-    fields: [
-      { key: "image_api_base", label: "兼容 API Base" },
-      { key: "image_api_key", label: "兼容 API Key", type: "password" },
-      { key: "image_1k_api_key", label: "兼容 1K API Key", type: "password" },
-      { key: "default_aspect_ratio", label: "旧版默认比例字段" },
-    ],
-  },
-  {
     title: "gpt-image-2 1K",
+    keyPool: "gpt1k",
     fields: [
-      { key: "gpt_image_1k_api_base", label: "API Base" },
-      { key: "gpt_image_1k_api_key", label: "API Key", type: "password" },
-      { key: "image_model_gpt_image_2_1k", label: "模型 ID" },
+      { key: "image_model_gpt_image_2_1k", label: "全局模型 ID" },
     ],
   },
   {
     title: "gpt-image-2 2K/4K",
+    keyPool: "gpt2k4k",
     fields: [
-      { key: "gpt_image_api_base", label: "API Base" },
-      { key: "gpt_image_api_key", label: "API Key", type: "password" },
-      { key: "image_model_gpt_image_2", label: "模型 ID" },
+      { key: "image_model_gpt_image_2", label: "全局模型 ID" },
     ],
   },
   {
     title: "Gemini / Nano Banana",
-    fields: [
-      { key: "gemini_image_api_base", label: "API Base" },
-      { key: "gemini_image_api_key", label: "API Key", type: "password" },
-    ],
+    keyPool: "gemini",
   },
   {
     title: "生图通用请求参数",
@@ -198,6 +196,29 @@ document.addEventListener("DOMContentLoaded", () => {
     void runAction(() => createUser());
   });
   refs.saveGlobalSettingsButton.addEventListener("click", () => void runAction(() => saveGlobalSettings()));
+  refs.settingsForm.addEventListener("click", (event) => {
+    const addButton = event.target.closest("[data-key-pool-add]");
+    if (addButton) {
+      addKeyPoolItem(addButton.dataset.keyPoolAdd);
+      return;
+    }
+    const removeButton = event.target.closest("[data-key-pool-remove]");
+    if (removeButton) {
+      removeKeyPoolItem(removeButton.dataset.keyPoolRemove, removeButton.closest("[data-key-pool-row]"));
+    }
+  });
+  refs.settingsForm.addEventListener("input", (event) => {
+    const row = event.target.closest("[data-key-pool-row]");
+    if (row) {
+      syncKeyPoolDefaultOptions(row.dataset.keyPoolRow);
+    }
+  });
+  refs.settingsForm.addEventListener("change", (event) => {
+    const row = event.target.closest("[data-key-pool-row]");
+    if (row) {
+      syncKeyPoolDefaultOptions(row.dataset.keyPoolRow);
+    }
+  });
   refs.openAdminLogsButton.addEventListener("click", () => void runAction(() => openAdminLogs()));
   refs.refreshButton.addEventListener("click", () => void runAction(() => loadAll()));
   refs.logModalCloseButtons.forEach((button) => {
@@ -339,7 +360,7 @@ function renderUser(user) {
       <div class="item-row">
         <div>
           <strong>${escapeHtml(user.username)} · ${escapeHtml(user.display_name || "")}</strong>
-          <small>${escapeHtml(user.role)} · ${escapeHtml(user.status)} · 存储 ${mb(user.storage_bytes)} MB / ${quota.storage_limit_mb || 0} MB · 并发 ${quota.concurrent_limit || 20}</small>
+          <small>${escapeHtml(user.role)} · ${escapeHtml(user.status)} · 存储 ${mb(user.storage_bytes)} MB / ${quota.storage_limit_mb || 0} MB · 并发 ${quota.concurrent_limit || 30}</small>
         </div>
         <div class="item-actions">
           <button class="ghost" data-action="user-logs" data-user-id="${user.id}" data-username="${escapeHtml(user.username)}">任务日志</button>
@@ -418,7 +439,7 @@ async function createUser() {
     display_name: form.get("display_name"),
     password: password || null,
     role: form.get("role"),
-    concurrent_limit: Number(form.get("concurrent_limit") || 20),
+    concurrent_limit: Number(form.get("concurrent_limit") || 30),
     storage_limit_mb: Number(form.get("storage_limit_mb") || 10240),
   };
   const result = await api("/api/v1/admin/users", {
@@ -434,7 +455,8 @@ async function createUser() {
 async function loadSettings() {
   const payload = await api("/api/v1/admin/settings");
   revealedGlobalSettings = null;
-  renderSettingsForm(payload.settings || {});
+  currentSettings = payload.settings || {};
+  renderSettingsForm(currentSettings);
 }
 
 function renderSettingsForm(settings) {
@@ -447,12 +469,20 @@ function renderSettingsForm(settings) {
     legend.textContent = section.title;
     fieldset.appendChild(legend);
 
-    const grid = document.createElement("div");
-    grid.className = "settings-grid";
-    for (const field of section.fields) {
-      grid.appendChild(createSettingField(field, settings));
+    if (section.keyPool) {
+      fieldset.classList.add("key-pool");
+      fieldset.dataset.keyPool = section.keyPool;
+      fieldset.appendChild(createKeyPoolEditor(section.keyPool, settings));
     }
-    fieldset.appendChild(grid);
+
+    if (Array.isArray(section.fields) && section.fields.length) {
+      const grid = document.createElement("div");
+      grid.className = "settings-grid";
+      for (const field of section.fields) {
+        grid.appendChild(createSettingField(field, settings));
+      }
+      fieldset.appendChild(grid);
+    }
     fragment.appendChild(fieldset);
   }
   refs.settingsForm.appendChild(fragment);
@@ -606,6 +636,320 @@ function textSpan(text) {
   return span;
 }
 
+function createKeyPoolEditor(poolId, settings) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "key-pool__inner";
+  const bar = document.createElement("div");
+  bar.className = "key-pool__bar";
+  const defaultLabel = document.createElement("label");
+  defaultLabel.className = "field";
+  defaultLabel.appendChild(textSpan("默认 Key"));
+  const defaultSelect = document.createElement("select");
+  defaultSelect.dataset.keyPoolDefault = poolId;
+  defaultLabel.appendChild(defaultSelect);
+  const addButton = document.createElement("button");
+  addButton.type = "button";
+  addButton.className = "ghost key-pool__add";
+  addButton.dataset.keyPoolAdd = poolId;
+  addButton.textContent = "+ 添加 Key";
+  bar.append(defaultLabel, addButton);
+
+  const rowsNode = document.createElement("div");
+  rowsNode.className = "key-pool__rows";
+  rowsNode.dataset.keyPoolRows = poolId;
+  wrapper.append(bar, rowsNode);
+
+  const items = normalizeKeyPoolItems(poolId, settings);
+  const displayItems = items.length ? items : [createKeyPoolItem(poolId, settings, 1)];
+  displayItems.forEach((item, index) => {
+    rowsNode.appendChild(createKeyPoolRow(poolId, item, settings, index + 1));
+  });
+  window.setTimeout(() => {
+    syncKeyPoolDefaultOptions(poolId, settings[KEY_POOL_CONFIGS[poolId].defaultKey] || "");
+  }, 0);
+  return wrapper;
+}
+
+function normalizeKeyPoolItems(poolId, settings = currentSettings) {
+  const config = KEY_POOL_CONFIGS[poolId];
+  const rawItems = Array.isArray(settings?.[config.poolKey]) ? settings[config.poolKey] : [];
+  return rawItems
+    .filter((item) => item && typeof item === "object")
+    .map((item, index) => ({
+      ...createKeyPoolItem(poolId, settings, index + 1),
+      ...item,
+      id: String(item.id || "").trim() || createKeyPoolItemId(poolId),
+      name: String(item.name || "").trim() || `${config.itemLabel} ${index + 1}`,
+      api_base:
+        String(item.api_base || "").trim() ||
+        String(settings?.[config.apiBaseFallbackKey] || "").trim(),
+      api_key: String(item.api_key || "").trim(),
+      enabled: item.enabled !== false,
+    }));
+}
+
+function createKeyPoolItem(poolId, settings = currentSettings, index = 1) {
+  const config = KEY_POOL_CONFIGS[poolId];
+  const fallbackModel =
+    config.modelFallbackValue ||
+    String(settings?.[config.modelFallbackKey] || "").trim();
+  return {
+    id: createKeyPoolItemId(poolId),
+    name: `${config.itemLabel} ${index}`,
+    api_base: String(settings?.[config.apiBaseFallbackKey] || "").trim(),
+    api_key: "",
+    model: fallbackModel,
+    endpoint_type:
+      String(settings?.[config.endpointFallbackKey] || "").trim() ||
+      "chat_completions",
+    enabled: true,
+  };
+}
+
+function createKeyPoolItemId(poolId) {
+  return `${poolId}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createKeyPoolRow(poolId, item, settings = currentSettings, index = 1) {
+  const config = KEY_POOL_CONFIGS[poolId];
+  const row = document.createElement("div");
+  row.className = "key-pool-row";
+  row.dataset.keyPoolRow = poolId;
+  row.dataset.keyPoolItemId = item.id;
+
+  const grid = document.createElement("div");
+  grid.className = "key-pool-row__grid";
+  grid.appendChild(createKeyPoolTextField("名称", "name", item.name || `${config.itemLabel} ${index}`));
+  grid.appendChild(createKeyPoolTextField("API Base", "api_base", item.api_base || ""));
+  grid.appendChild(createKeyPoolPasswordField(item.api_key || ""));
+  if (config.fields.model) {
+    grid.appendChild(createKeyPoolModelField(poolId, item.model || "", settings));
+  }
+  if (config.fields.endpointType) {
+    grid.appendChild(createKeyPoolEndpointField(item.endpoint_type || "", settings));
+  }
+  row.appendChild(grid);
+
+  const actions = document.createElement("div");
+  actions.className = "key-pool-row__actions";
+  const enabledLabel = document.createElement("label");
+  enabledLabel.className = "field--checkbox key-pool-row__enabled";
+  const enabledInput = document.createElement("input");
+  enabledInput.type = "checkbox";
+  enabledInput.checked = item.enabled !== false;
+  enabledInput.dataset.keyPoolField = "enabled";
+  enabledLabel.append(enabledInput, textSpan("启用"));
+  const removeButton = document.createElement("button");
+  removeButton.type = "button";
+  removeButton.className = "ghost key-pool-row__remove";
+  removeButton.dataset.keyPoolRemove = poolId;
+  removeButton.textContent = "删除";
+  actions.append(enabledLabel, removeButton);
+  row.appendChild(actions);
+  return row;
+}
+
+function createKeyPoolTextField(labelText, fieldName, value) {
+  const label = document.createElement("label");
+  label.appendChild(textSpan(labelText));
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = value;
+  input.dataset.keyPoolField = fieldName;
+  if (fieldName === "api_base") {
+    input.autocomplete = "off";
+    input.inputMode = "url";
+    input.spellcheck = false;
+  }
+  label.appendChild(input);
+  return label;
+}
+
+function createKeyPoolPasswordField(value) {
+  const label = document.createElement("label");
+  label.appendChild(textSpan("API Key"));
+  const input = document.createElement("input");
+  input.type = "password";
+  input.value = value;
+  input.autocomplete = "new-password";
+  input.dataset.keyPoolField = "api_key";
+  input.setAttribute("data-lpignore", "true");
+  input.setAttribute("data-1p-ignore", "true");
+  label.appendChild(input);
+  return label;
+}
+
+function createKeyPoolModelField(poolId, value, settings) {
+  const label = document.createElement("label");
+  label.appendChild(textSpan("模型 ID"));
+  if (poolId === "gemini") {
+    const select = document.createElement("select");
+    select.dataset.keyPoolField = "model";
+    const options = (settings?.available_image_models || []).filter((option) =>
+      isNanoBananaModel(option.value ?? option)
+    );
+    const selectedValue = value || IMAGE_MODEL_NANO_BANANA_2;
+    for (const option of options.length
+      ? options
+      : [
+          { value: IMAGE_MODEL_NANO_BANANA_2, label: IMAGE_MODEL_NANO_BANANA_2 },
+          { value: IMAGE_MODEL_NANO_BANANA_PRO, label: IMAGE_MODEL_NANO_BANANA_PRO },
+        ]) {
+      select.appendChild(createOption(typeof option === "object" ? option : { value: option, label: option }, selectedValue));
+    }
+    label.appendChild(select);
+    return label;
+  }
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = value;
+  input.dataset.keyPoolField = "model";
+  label.appendChild(input);
+  return label;
+}
+
+function createKeyPoolEndpointField(value, settings) {
+  const label = document.createElement("label");
+  label.appendChild(textSpan("API 类型"));
+  const select = document.createElement("select");
+  select.dataset.keyPoolField = "endpoint_type";
+  for (const option of settings?.available_llm_endpoint_types || [
+    { value: "chat_completions", label: "/v1/chat/completions" },
+    { value: "responses", label: "/v1/responses" },
+  ]) {
+    select.appendChild(createOption(typeof option === "object" ? option : { value: option, label: option }, value || "chat_completions"));
+  }
+  label.appendChild(select);
+  return label;
+}
+
+function isNanoBananaModel(value) {
+  const text = String(value || "").trim().toLowerCase();
+  return text === IMAGE_MODEL_NANO_BANANA_2 || text === IMAGE_MODEL_NANO_BANANA_PRO;
+}
+
+function syncKeyPoolDefaultOptions(poolId, selectedValue = "") {
+  const defaultSelect = refs.settingsForm?.querySelector(`[data-key-pool-default="${poolId}"]`);
+  if (!defaultSelect || !KEY_POOL_CONFIGS[poolId]) {
+    return;
+  }
+  const wantedValue = selectedValue || defaultSelect.value || "";
+  const rows = Array.from(refs.settingsForm.querySelectorAll(`[data-key-pool-row="${poolId}"]`));
+  const items = rows.map((row, index) =>
+    readKeyPoolRow(poolId, row, index, true, false)
+  );
+  const selectedId =
+    wantedValue && items.some((item) => item.id === wantedValue)
+      ? wantedValue
+      : items.find((item) => item.enabled && item.api_key)?.id || items[0]?.id || "";
+  defaultSelect.innerHTML = "";
+  items.forEach((item, index) => {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = item.name || `${KEY_POOL_CONFIGS[poolId].itemLabel} ${index + 1}`;
+    option.selected = item.id === selectedId;
+    defaultSelect.appendChild(option);
+  });
+}
+
+function addKeyPoolItem(poolId) {
+  const rowsNode = refs.settingsForm?.querySelector(`[data-key-pool-rows="${poolId}"]`);
+  if (!rowsNode || !KEY_POOL_CONFIGS[poolId]) {
+    return;
+  }
+  const nextIndex = rowsNode.querySelectorAll("[data-key-pool-row]").length + 1;
+  rowsNode.appendChild(createKeyPoolRow(poolId, createKeyPoolItem(poolId, currentSettings, nextIndex), currentSettings, nextIndex));
+  syncKeyPoolDefaultOptions(poolId);
+}
+
+function removeKeyPoolItem(poolId, row) {
+  if (!row) {
+    return;
+  }
+  row.remove();
+  const rowsNode = refs.settingsForm?.querySelector(`[data-key-pool-rows="${poolId}"]`);
+  if (rowsNode && !rowsNode.querySelector("[data-key-pool-row]")) {
+    rowsNode.appendChild(createKeyPoolRow(poolId, createKeyPoolItem(poolId, currentSettings, 1), currentSettings, 1));
+  }
+  syncKeyPoolDefaultOptions(poolId);
+}
+
+function collectKeyPools() {
+  const payload = {};
+  Object.entries(KEY_POOL_CONFIGS).forEach(([poolId, config]) => {
+    const rows = Array.from(refs.settingsForm.querySelectorAll(`[data-key-pool-row="${poolId}"]`));
+    const items = rows
+      .map((row, index) => readKeyPoolRow(poolId, row, index, false))
+      .filter(Boolean);
+    const defaultSelect = refs.settingsForm.querySelector(`[data-key-pool-default="${poolId}"]`);
+    const selectedDefault = String(defaultSelect?.value || "").trim();
+    payload[config.poolKey] = items;
+    payload[config.defaultKey] = items.some((item) => item.id === selectedDefault)
+      ? selectedDefault
+      : items[0]?.id || "";
+  });
+  return payload;
+}
+
+function readKeyPoolRow(
+  poolId,
+  row,
+  index = 0,
+  includeEmpty = false,
+  validateApiBase = true
+) {
+  const config = KEY_POOL_CONFIGS[poolId];
+  const readField = (fieldName) => {
+    const control = row.querySelector(`[data-key-pool-field="${fieldName}"]`);
+    if (!control) {
+      return "";
+    }
+    if (control.type === "checkbox") {
+      return control.checked;
+    }
+    return String(control.value || "").trim();
+  };
+  let apiBase = readField("api_base");
+  if (validateApiBase && !isValidApiBaseValue(apiBase)) {
+    apiBase = String(currentSettings?.[config.apiBaseFallbackKey] || "").trim();
+    const input = row.querySelector('[data-key-pool-field="api_base"]');
+    if (input) {
+      input.value = apiBase;
+    }
+  }
+  const apiKey = readField("api_key");
+  if (!includeEmpty && !apiKey) {
+    return null;
+  }
+  const item = {
+    id: String(row.dataset.keyPoolItemId || "").trim() || createKeyPoolItemId(poolId),
+    name: readField("name") || `${config.itemLabel} ${index + 1}`,
+    api_base: apiBase,
+    api_key: apiKey,
+    enabled: Boolean(readField("enabled")),
+  };
+  if (config.fields.model) {
+    item.model = readField("model") || config.modelFallbackValue || "";
+  }
+  if (config.fields.endpointType) {
+    item.endpoint_type = readField("endpoint_type") || "chat_completions";
+  }
+  return item;
+}
+
+function isValidApiBaseValue(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return true;
+  }
+  try {
+    const url = new URL(text);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch (_error) {
+    return false;
+  }
+}
+
 async function saveGlobalSettings() {
   const settings = collectSettings();
   await api("/api/v1/admin/settings", {
@@ -626,7 +970,10 @@ function collectSettings() {
         ? normalizeConfiguredImageModelId(value)
         : value;
   });
-  return settings;
+  return {
+    ...settings,
+    ...collectKeyPools(),
+  };
 }
 
 function readControlValue(input) {
@@ -648,9 +995,13 @@ async function loadJobs() {
   refs.jobsList.querySelectorAll("[data-job-action='logs']").forEach((button) => {
     button.addEventListener("click", () => void runAction(() => openJobLogs(button.dataset.jobId)));
   });
+  refs.jobsList.querySelectorAll("[data-job-action='delete']").forEach((button) => {
+    button.addEventListener("click", () => void runAction(() => deleteAdminJob(button.dataset.jobId)));
+  });
 }
 
 function renderJob(job) {
+  const canDelete = !["queued", "running"].includes(job.status);
   return `
     <div class="item">
       <div class="item-row">
@@ -660,11 +1011,27 @@ function renderJob(job) {
         </div>
         <div class="item-actions">
           <button class="ghost" data-job-action="logs" data-job-id="${escapeHtml(job.id)}" type="button">日志</button>
+          ${
+            canDelete
+              ? `<button class="danger" data-job-action="delete" data-job-id="${escapeHtml(job.id)}" type="button">删除</button>`
+              : ""
+          }
         </div>
       </div>
       ${job.error ? `<small>${escapeHtml(job.error)}</small>` : ""}
     </div>
   `;
+}
+
+async function deleteAdminJob(jobId) {
+  if (!jobId) {
+    return;
+  }
+  if (!window.confirm("确定删除这个任务？任务记录和对应文件都会删除。")) {
+    return;
+  }
+  await api(`/api/v1/admin/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+  await Promise.all([loadSummary(), loadJobs()]);
 }
 
 async function openJobLogs(jobId, loadingTitle = "日志加载中") {

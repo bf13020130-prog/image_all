@@ -10,6 +10,7 @@ from ..legacy_contract import with_china_time_fields
 from ..storage_service import save_uploads
 from ..task_service import (
     create_job,
+    delete_job,
     finish_job,
     get_job,
     list_job_events,
@@ -32,6 +33,11 @@ def get_one_job(job_id: str, user: dict = Depends(require_active_user)) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在。")
     return job
+
+
+@router.delete("/jobs/{job_id}")
+def delete_one_job(job_id: str, user: dict = Depends(require_csrf_user)) -> dict:
+    return delete_job(job_id, user_id=user["id"])
 
 
 @router.get("/jobs/{job_id}/events")
