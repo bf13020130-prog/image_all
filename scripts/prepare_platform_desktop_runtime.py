@@ -215,6 +215,7 @@ def prepare_backend(root: Path, target: Path) -> None:
     for file_name in (
         "config.example.json",
         "pipeline_core.py",
+        "settings_contract.py",
     ):
         shutil.copy2(root / file_name, target / file_name)
     env_path = root / ".env"

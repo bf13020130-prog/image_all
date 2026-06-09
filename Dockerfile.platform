@@ -12,6 +12,7 @@ COPY platform_backend /app/platform_backend
 COPY platform_frontend /app/platform_frontend
 COPY scripts /app/scripts
 COPY pipeline_core.py /app/pipeline_core.py
+COPY settings_contract.py /app/settings_contract.py
 COPY config.example.json /app/config.example.json
 
 EXPOSE 8000
